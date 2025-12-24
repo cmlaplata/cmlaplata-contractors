@@ -48,6 +48,7 @@ export const FacebookLeadsList = forwardRef<FacebookLeadsListRef, FacebookLeadsL
   const [dateTimeModalType, setDateTimeModalType] = useState<'appointment' | 'recontact' | null>(null);
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
   const [selectedTime, setSelectedTime] = useState<string>('');
+  const [clientStatuses, setClientStatuses] = useState<{ [key: number]: string }>({});
   const animatedHeights = useRef<{ [key: number]: Animated.Value }>({});
   const quickResponseHeights = useRef<{ [key: number]: Animated.Value }>({});
   const clientStatusHeights = useRef<{ [key: number]: Animated.Value }>({});
@@ -452,6 +453,17 @@ export const FacebookLeadsList = forwardRef<FacebookLeadsListRef, FacebookLeadsL
     }
   };
 
+  const getStatusLabel = (status: string): string => {
+    const statusMap: { [key: string]: string } = {
+      'no-contest': 'No contestó',
+      'appointment': 'Cita Agendada',
+      'recontact': 'Por recontactar',
+      'estimated-sold': 'Estimado vendido',
+      'work-completed': 'Trabajo terminado',
+    };
+    return statusMap[status] || status;
+  };
+
   const handleClientStatusOption = (leadId: number, status: string) => {
     if (status === 'appointment' || status === 'recontact') {
       setDateTimeModalType(status === 'appointment' ? 'appointment' : 'recontact');
@@ -460,10 +472,11 @@ export const FacebookLeadsList = forwardRef<FacebookLeadsListRef, FacebookLeadsL
       setSelectedTime('');
       setDateTimeModalVisible(true);
     } else {
-      // Para los otros estados, solo mostrar confirmación por ahora
+      // Guardar el estado seleccionado
+      setClientStatuses(prev => ({ ...prev, [leadId]: status }));
       Alert.alert(
         'Estado del Cliente',
-        `Estado actualizado a: ${status}`,
+        `Estado actualizado a: ${getStatusLabel(status)}`,
         [
           { text: 'OK', onPress: () => closeMenu(leadId) },
         ]
@@ -475,6 +488,10 @@ export const FacebookLeadsList = forwardRef<FacebookLeadsListRef, FacebookLeadsL
     if (!selectedTime) {
       Alert.alert('Error', 'Por favor selecciona una hora');
       return;
+    }
+    // Guardar el estado con la fecha y hora
+    if (modalLeadId && dateTimeModalType) {
+      setClientStatuses(prev => ({ ...prev, [modalLeadId]: dateTimeModalType }));
     }
     // TODO: Implementar guardado en backend
     Alert.alert(
@@ -638,6 +655,10 @@ export const FacebookLeadsList = forwardRef<FacebookLeadsListRef, FacebookLeadsL
             autoCorrect={false}
             textAlignVertical="center"
             {...(Platform.OS === 'android' && { includeFontPadding: false })}
+            {...(Platform.OS === 'web' && { 
+              // @ts-ignore - web only property
+              outlineStyle: 'none',
+            })}
           />
           {searchQuery.length > 0 && (
             <TouchableOpacity
@@ -661,8 +682,8 @@ export const FacebookLeadsList = forwardRef<FacebookLeadsListRef, FacebookLeadsL
             onPress={onNew}
             activeOpacity={0.8}
           >
-            <Ionicons name="add" size={20} color="#fff" />
-            <Text style={styles.newButtonText}>Nuevo estimado</Text>
+            <Ionicons name="add" size={20} color="#fff" style={styles.newButtonIcon} />
+            <Text style={styles.newButtonText}>Agregar</Text>
           </TouchableOpacity>
         )}
       </View>
@@ -794,6 +815,12 @@ export const FacebookLeadsList = forwardRef<FacebookLeadsListRef, FacebookLeadsL
                       <Ionicons name="time-outline" size={16} color={colors.textSecondary} />
                       <Text style={styles.dateText}>{formatDate(lead.createdAt)}</Text>
                     </View>
+                    <View style={styles.infoRow}>
+                      <Ionicons name="information-circle-outline" size={16} color={colors.textSecondary} />
+                      <Text style={styles.statusTextInfo}>
+                        Estado: {clientStatuses[lead.id] ? getStatusLabel(clientStatuses[lead.id]) : 'Agendado'}
+                      </Text>
+                    </View>
                   </View>
                   <TouchableOpacity
                     style={styles.menuToggleButton}
@@ -833,6 +860,72 @@ export const FacebookLeadsList = forwardRef<FacebookLeadsListRef, FacebookLeadsL
                         color="#fff" 
                       />
                     </TouchableOpacity>
+                    {(() => {
+                      const quickOpacity = quickResponseHeights.current[lead.id].interpolate({
+                        inputRange: [0, 1],
+                        outputRange: [0, 1],
+                      });
+                      
+                      const quickHeight = Animated.multiply(
+                        animatedHeights.current[lead.id],
+                        quickResponseHeights.current[lead.id].interpolate({
+                          inputRange: [0, 1],
+                          outputRange: [0, 200],
+                        })
+                      );
+                      
+                      return (
+                        <Animated.View 
+                          style={{ 
+                            height: quickHeight, 
+                            opacity: quickOpacity,
+                            overflow: 'hidden',
+                          }}
+                        >
+                          <View style={styles.quickResponseContent}>
+                            <TouchableOpacity
+                              style={styles.menuItem}
+                              onPress={() => handleGenerateEmail(lead.id, 'ingles')}
+                              disabled={generatingEmail === lead.id}
+                              activeOpacity={0.7}
+                            >
+                              {generatingEmail === lead.id ? (
+                                <ActivityIndicator size="small" color={colors.primary} />
+                              ) : (
+                                <Ionicons name="mail-outline" size={20} color={colors.primary} />
+                              )}
+                              <Text style={styles.menuItemText}>Email</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                              style={styles.menuItem}
+                              onPress={() => handleText(lead.id)}
+                              disabled={generatingSMS === lead.id}
+                              activeOpacity={0.7}
+                            >
+                              {generatingSMS === lead.id ? (
+                                <ActivityIndicator size="small" color={colors.primary} />
+                              ) : (
+                                <Ionicons name="chatbubble-outline" size={20} color={colors.primary} />
+                              )}
+                              <Text style={styles.menuItemText}>SMS</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                              style={styles.menuItem}
+                              onPress={() => handleCall(lead.id)}
+                              disabled={generatingCall === lead.id}
+                              activeOpacity={0.7}
+                            >
+                              {generatingCall === lead.id ? (
+                                <ActivityIndicator size="small" color={colors.primary} />
+                              ) : (
+                                <Ionicons name="call-outline" size={20} color={colors.primary} />
+                              )}
+                              <Text style={styles.menuItemText}>Llamada</Text>
+                            </TouchableOpacity>
+                          </View>
+                        </Animated.View>
+                      );
+                    })()}
                     <TouchableOpacity
                       style={styles.quickResponseButton}
                       onPress={() => {
@@ -937,73 +1030,6 @@ export const FacebookLeadsList = forwardRef<FacebookLeadsListRef, FacebookLeadsL
                         </TouchableOpacity>
                       )}
                     </View>
-                    {(() => {
-                      const quickOpacity = quickResponseHeights.current[lead.id].interpolate({
-                        inputRange: [0, 1],
-                        outputRange: [0, 1],
-                      });
-                      
-                      // Usar el mismo Animated.Value para controlar la visibilidad
-                      const quickHeight = Animated.multiply(
-                        animatedHeights.current[lead.id], // Solo visible si el menú principal está abierto
-                        quickResponseHeights.current[lead.id].interpolate({
-                          inputRange: [0, 1],
-                          outputRange: [0, 200], // Altura para 3 botones (Email, SMS, Llamada) + gaps
-                        })
-                      );
-                      
-                      return (
-                        <Animated.View 
-                          style={{ 
-                            height: quickHeight, 
-                            opacity: quickOpacity,
-                            overflow: 'hidden',
-                          }}
-                        >
-                          <View style={styles.quickResponseContent}>
-                            <TouchableOpacity
-                              style={styles.menuItem}
-                              onPress={() => handleGenerateEmail(lead.id, 'ingles')}
-                              disabled={generatingEmail === lead.id}
-                              activeOpacity={0.7}
-                            >
-                              {generatingEmail === lead.id ? (
-                                <ActivityIndicator size="small" color={colors.primary} />
-                              ) : (
-                                <Ionicons name="mail-outline" size={20} color={colors.primary} />
-                              )}
-                              <Text style={styles.menuItemText}>Email</Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity
-                              style={styles.menuItem}
-                              onPress={() => handleText(lead.id)}
-                              disabled={generatingSMS === lead.id}
-                              activeOpacity={0.7}
-                            >
-                              {generatingSMS === lead.id ? (
-                                <ActivityIndicator size="small" color={colors.primary} />
-                              ) : (
-                                <Ionicons name="chatbubble-outline" size={20} color={colors.primary} />
-                              )}
-                              <Text style={styles.menuItemText}>SMS</Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity
-                              style={styles.menuItem}
-                              onPress={() => handleCall(lead.id)}
-                              disabled={generatingCall === lead.id}
-                              activeOpacity={0.7}
-                            >
-                              {generatingCall === lead.id ? (
-                                <ActivityIndicator size="small" color={colors.primary} />
-                              ) : (
-                                <Ionicons name="call-outline" size={20} color={colors.primary} />
-                              )}
-                              <Text style={styles.menuItemText}>Llamada</Text>
-                            </TouchableOpacity>
-                          </View>
-                        </Animated.View>
-                      );
-                    })()}
                   </View>
                 </Animated.View>
               </View>
@@ -1255,9 +1281,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     minHeight: 44,
     flex: 0.6,
+    overflow: 'hidden',
   },
   searchIcon: {
     marginRight: 8,
+    flexShrink: 0,
   },
   searchInput: {
     flex: 1,
@@ -1266,10 +1294,13 @@ const styles = StyleSheet.create({
     paddingVertical: Platform.OS === 'android' ? 12 : 10,
     paddingTop: Platform.OS === 'android' ? 12 : 10,
     paddingBottom: Platform.OS === 'android' ? 12 : 10,
+    minWidth: 0,
+    width: '100%',
   },
   clearButton: {
     padding: 4,
     marginLeft: 4,
+    flexShrink: 0,
   },
   searchResultsInfo: {
     paddingVertical: 8,
@@ -1394,7 +1425,7 @@ const styles = StyleSheet.create({
     paddingTop: 8,
   },
   menuContent: {
-    gap: 8,
+    gap: 4,
   },
   twoButtonsRow: {
     flexDirection: 'row',
@@ -1416,7 +1447,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 12,
     borderRadius: 12,
-    marginTop: 8,
   },
   quickResponseButtonText: {
     color: '#fff',
@@ -1466,6 +1496,12 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: colors.textSecondary,
     flex: 1,
+  },
+  statusTextInfo: {
+    fontSize: 14,
+    color: colors.textPrimary,
+    flex: 1,
+    fontWeight: '500',
   },
   emptyContainer: {
     padding: 60,
@@ -1611,16 +1647,14 @@ const styles = StyleSheet.create({
     gap: 6,
     backgroundColor: colors.primary,
     paddingHorizontal: 14,
-    paddingVertical: 10,
+    paddingVertical: 8,
     borderRadius: 12,
-    shadowColor: colors.primary,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 4,
     flex: 0.4,
     justifyContent: 'center',
-    minHeight: 44,
+    minHeight: 40,
+  },
+  newButtonIcon: {
+    marginTop: 4,
   },
   newButtonText: {
     color: '#fff',
