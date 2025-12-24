@@ -69,6 +69,30 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
               name: response.data?.name,
             });
 
+            // Console log detallado con toda la información del usuario
+            // (Nota: userClientData se agregará después de la segunda llamada)
+            console.log('📋 INFORMACIÓN COMPLETA DEL USUARIO:', {
+              id: response.data?.id,
+              name: response.data?.name,
+              email: response.data?.email,
+              firebase_id: response.data?.firebase_id,
+              userType: response.data?.userType,
+              clientId: response.data?.clientId,
+              person: response.data?.person ? {
+                id: response.data.person.id,
+                name: response.data.person.name,
+                email: response.data.person.email,
+                phone: response.data.person.phone,
+                country: response.data.person.country,
+              } : null,
+              // Mostrar toda la respuesta completa del backend
+              fullResponse: JSON.stringify(response.data, null, 2),
+            });
+            
+            // Console log adicional para ver la estructura completa de la respuesta
+            console.log('🔍 ESTRUCTURA COMPLETA DE LA RESPUESTA DEL BACKEND:', response.data);
+            console.log('🔍 TODOS LOS CAMPOS DISPONIBLES:', Object.keys(response.data || {}));
+
             const userData = response.data;
 
             // Formatear nombre (primera letra mayúscula)
@@ -76,6 +100,48 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
               let name = userData.name.toLowerCase();
               name = name.charAt(0).toUpperCase() + name.slice(1);
               userData.name = name;
+            }
+
+            // Si el usuario tiene clientId, obtener los datos del cliente
+            if (userData.clientId) {
+              try {
+                console.log('📡 Obteniendo datos del cliente...');
+                const clientUrl = `${API_BASE_URL}/clients/get/client/${userData.clientId}`;
+                console.log('🌐 Consultando cliente:', clientUrl);
+                
+                const clientResponse = await axiosInstance.get(clientUrl);
+                
+                console.log('✅ Datos del cliente obtenidos:', {
+                  status: clientResponse.status,
+                  data: clientResponse.data,
+                });
+                
+                // Agregar los datos del cliente al objeto user
+                // Si la respuesta es un array, tomar el primer elemento; si es un objeto, usarlo directamente
+                const clientData = Array.isArray(clientResponse.data) 
+                  ? clientResponse.data[0] 
+                  : clientResponse.data;
+                
+                userData.userClientData = clientData;
+                
+                console.log('📋 USUARIO CON DATOS DEL CLIENTE:', {
+                  userId: userData.id,
+                  clientId: userData.clientId,
+                  userClientData: userData.userClientData,
+                });
+              } catch (clientError: any) {
+                console.warn('⚠️ Error obteniendo datos del cliente:', {
+                  code: clientError.code,
+                  message: clientError.message,
+                  response: clientError.response?.data,
+                  status: clientError.response?.status,
+                });
+                // Continuar sin los datos del cliente si hay error
+                userData.userClientData = null;
+              }
+            } else {
+              console.log('ℹ️ Usuario sin clientId, no se obtienen datos del cliente');
+              userData.userClientData = null;
             }
 
             setUser(userData);

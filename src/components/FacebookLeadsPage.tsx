@@ -93,31 +93,29 @@ export const FacebookLeadsPage: React.FC = () => {
               resizeMode="cover"
             />
           </View>
-          {!showForm && user?.name && (
+          {user?.name && (
             <Text style={styles.userNameText}>{user.name}</Text>
           )}
         </View>
-        {!showForm && (
-          <View style={styles.headerActions}>
-            {isMobile ? (
-              <TouchableOpacity 
-                style={styles.menuButton} 
-                onPress={() => setShowMobileDrawer(true)}
-                activeOpacity={0.8}
-              >
-                <Ionicons name="menu-outline" size={24} color="#fff" />
-              </TouchableOpacity>
-            ) : (
-              <TouchableOpacity 
-                style={styles.menuButton} 
-                onPress={() => setShowUserMenu(true)}
-                activeOpacity={0.8}
-              >
-                <Ionicons name="settings-outline" size={24} color="#fff" />
-              </TouchableOpacity>
-            )}
-          </View>
-        )}
+        <View style={styles.headerActions}>
+          {isMobile ? (
+            <TouchableOpacity 
+              style={styles.menuButton} 
+              onPress={() => setShowMobileDrawer(true)}
+              activeOpacity={0.8}
+            >
+              <Ionicons name="menu-outline" size={24} color="#fff" />
+            </TouchableOpacity>
+          ) : (
+            <TouchableOpacity 
+              style={styles.menuButton} 
+              onPress={() => setShowUserMenu(true)}
+              activeOpacity={0.8}
+            >
+              <Ionicons name="settings-outline" size={24} color="#fff" />
+            </TouchableOpacity>
+          )}
+        </View>
       </View>
 
 

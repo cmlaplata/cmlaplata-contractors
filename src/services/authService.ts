@@ -25,6 +25,7 @@ export interface User {
     phone?: string;
     country?: string;
   };
+  userClientData?: any; // Datos del cliente obtenidos del endpoint /clients/get/client/:clientId
 }
 
 export interface LoginResult {
@@ -103,6 +104,42 @@ export const authService = {
       // 4. Formatear nombre (primera letra mayúscula)
       if (userData.name) {
         userData.name = formatName(userData.name);
+      }
+
+      // 5. Si el usuario tiene clientId, obtener los datos del cliente
+      if (userData.clientId) {
+        try {
+          console.log('📡 Obteniendo datos del cliente durante login...');
+          const clientUrl = `${API_BASE_URL}/clients/get/client/${userData.clientId}`;
+          console.log('🌐 Consultando cliente:', clientUrl);
+          
+          const clientResponse = await axiosInstance.get(clientUrl);
+          
+          console.log('✅ Datos del cliente obtenidos durante login:', {
+            status: clientResponse.status,
+            data: clientResponse.data,
+          });
+          
+          // Agregar los datos del cliente al objeto user
+          // Si la respuesta es un array, tomar el primer elemento; si es un objeto, usarlo directamente
+          const clientData = Array.isArray(clientResponse.data) 
+            ? clientResponse.data[0] 
+            : clientResponse.data;
+          
+          userData.userClientData = clientData;
+        } catch (clientError: any) {
+          console.warn('⚠️ Error obteniendo datos del cliente durante login:', {
+            code: clientError.code,
+            message: clientError.message,
+            response: clientError.response?.data,
+            status: clientError.response?.status,
+          });
+          // Continuar sin los datos del cliente si hay error
+          userData.userClientData = null;
+        }
+      } else {
+        console.log('ℹ️ Usuario sin clientId, no se obtienen datos del cliente');
+        userData.userClientData = null;
       }
 
       console.log('✅ Login completado exitosamente');

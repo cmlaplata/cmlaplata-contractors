@@ -7,11 +7,17 @@ export interface FacebookLead {
   id: number;
   clientId: number | null;
   name: string | null;
-  phoneManual: string | null;
-  phoneAuto: string | null;
-  project: string | null;
-  city: string | null;
-  email: string | null;
+  phone: string | null;                          // Teléfono del destinatario
+  phoneManual: string | null;                    // Teléfono manual (opcional)
+  phoneAuto: string | null;                     // Teléfono automático (opcional)
+  email: string | null;                          // Email
+  city: string | null;                           // Ciudad
+  preferredContactMethod: string | null;         // Método de contacto preferido
+  project: string | null;                        // Proyecto
+  estimatedTimeToStart: string | null;          // Fecha estimada para comenzar (opcional)
+  availableBudget: string | null;               // Presupuesto disponible (opcional)
+  extraInfo: string | null;                     // Información extra (opcional)
+  clientStatus: string | null;                  // Estado del cliente
   data1: string | null;
   data2: string | null;
   data3: string | null;
@@ -239,6 +245,44 @@ export const facebookLeadsService = {
       `${API_BASE_URL}/email/send-review-request/${leadId}`
     );
     return response.data.data;
+  },
+
+  // Actualizar estado del cliente
+  updateClientStatus: async (leadId: number, clientStatus: string): Promise<FacebookLead> => {
+    const url = `${API_BASE_URL}/facebook-leads/${leadId}/client-status`;
+    const body = { clientStatus };
+    
+    console.log('📡 updateClientStatus: Iniciando...');
+    console.log('📡 updateClientStatus: URL:', url);
+    console.log('📡 updateClientStatus: leadId:', leadId);
+    console.log('📡 updateClientStatus: clientStatus:', clientStatus);
+    console.log('📡 updateClientStatus: Body:', JSON.stringify(body, null, 2));
+    
+    try {
+      const response = await api.patch<ApiResponse<FacebookLead>>(url, body);
+      
+      console.log('✅ updateClientStatus: Respuesta recibida:', {
+        status: response.status,
+        statusText: response.statusText,
+        data: response.data,
+      });
+      console.log('✅ updateClientStatus: Lead actualizado:', JSON.stringify(response.data.data, null, 2));
+      console.log('✅ updateClientStatus: clientStatus en respuesta:', response.data.data?.clientStatus);
+      
+      return response.data.data;
+    } catch (error: any) {
+      console.error('❌ updateClientStatus: Error:', {
+        error,
+        message: error?.message,
+        response: error?.response?.data,
+        status: error?.response?.status,
+        statusText: error?.response?.statusText,
+        url: error?.config?.url,
+        method: error?.config?.method,
+        data: error?.config?.data,
+      });
+      throw error;
+    }
   },
 };
 

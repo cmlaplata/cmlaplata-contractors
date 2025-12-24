@@ -1,5 +1,7 @@
 import React, { useState, useImperativeHandle, forwardRef, useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, ActivityIndicator, TextInput, Platform, Animated, Modal } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, ActivityIndicator, TextInput, Platform, Animated, Modal, Linking } from 'react-native';
+import DateTimePicker from '@react-native-community/datetimepicker';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFacebookLeads } from '../hooks/useFacebookLeads';
 import { useLeadOperations } from '../hooks/useLeadOperations';
 import { useAuth } from '../context/AuthContext';
@@ -21,6 +23,42 @@ export interface FacebookLeadsListRef {
 export const FacebookLeadsList = forwardRef<FacebookLeadsListRef, FacebookLeadsListProps>(
   ({ onEdit, onNew }, ref) => {
   const { user, loading: authLoading } = useAuth();
+  
+  // Console log para ver la información del usuario en este componente
+  useEffect(() => {
+    if (user) {
+      console.log('👤 USUARIO EN FacebookLeadsList:', {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        firebase_id: user.firebase_id,
+        userType: user.userType,
+        clientId: user.clientId,
+        person: user.person ? {
+          id: user.person.id,
+          name: user.person.name,
+          email: user.person.email,
+          phone: user.person.phone,
+          country: user.person.country,
+        } : null,
+        userClientData: user.userClientData ? {
+          // Mostrar información del cliente si está disponible
+          ...user.userClientData,
+        } : null,
+        // Información completa del usuario
+        fullUser: JSON.stringify(user, null, 2),
+      });
+      
+      // Console log adicional para ver todos los campos disponibles
+      console.log('🔍 TODOS LOS CAMPOS DEL USUARIO:', Object.keys(user));
+      console.log('🔍 ESTRUCTURA COMPLETA DEL USUARIO:', user);
+      
+      // Console log específico para los datos del cliente
+      if (user.userClientData) {
+        console.log('🏢 DATOS DEL CLIENTE (userClientData):', user.userClientData);
+      }
+    }
+  }, [user]);
   const [currentPage, setCurrentPage] = useState(1);
   const [searchQuery, setSearchQuery] = useState('');
   const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
@@ -30,7 +68,7 @@ export const FacebookLeadsList = forwardRef<FacebookLeadsListRef, FacebookLeadsL
   const [searchError, setSearchError] = useState<string | null>(null);
   const [searchPage, setSearchPage] = useState(1);
   const limit = 10;
-  const debounceTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const debounceTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [expandedLeadId, setExpandedLeadId] = useState<number | null>(null);
   const [expandedQuickResponse, setExpandedQuickResponse] = useState<number | null>(null);
   const [expandedClientStatus, setExpandedClientStatus] = useState<number | null>(null);
@@ -49,19 +87,96 @@ export const FacebookLeadsList = forwardRef<FacebookLeadsListRef, FacebookLeadsL
   const [dateTimeModalType, setDateTimeModalType] = useState<'appointment' | 'recontact' | null>(null);
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
   const [selectedTime, setSelectedTime] = useState<string>('');
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [showTimePicker, setShowTimePicker] = useState(false);
   const [clientStatuses, setClientStatuses] = useState<{ [key: number]: string }>({});
+  const [showTutorial, setShowTutorial] = useState(false);
   const animatedHeights = useRef<{ [key: number]: Animated.Value }>({});
   const quickResponseHeights = useRef<{ [key: number]: Animated.Value }>({});
   const clientStatusHeights = useRef<{ [key: number]: Animated.Value }>({});
   const menuBaseHeights = useRef<{ [key: number]: Animated.Value }>({});
+  const tutorialArrowPosition = useRef(new Animated.Value(0));
   
   const clientId = user?.clientId;
+  
+  // Verificar si el tutorial ya fue completado
+  useEffect(() => {
+    const checkTutorialStatus = async () => {
+      try {
+        const tutorialCompleted = await AsyncStorage.getItem('menuToggleTutorialCompleted');
+        if (!tutorialCompleted) {
+          setShowTutorial(true);
+          // Iniciar animación de flecha
+          startTutorialAnimation();
+        }
+      } catch (error) {
+        console.error('Error checking tutorial status:', error);
+      }
+    };
+    
+    checkTutorialStatus();
+  }, []);
+  
+  // Animación de flecha para el tutorial
+  const startTutorialAnimation = () => {
+    const arrowAnimation = Animated.loop(
+      Animated.sequence([
+        Animated.timing(tutorialArrowPosition.current, {
+          toValue: 8,
+          duration: 600,
+          useNativeDriver: true,
+        }),
+        Animated.timing(tutorialArrowPosition.current, {
+          toValue: 0,
+          duration: 600,
+          useNativeDriver: true,
+        }),
+      ])
+    );
+    arrowAnimation.start();
+  };
+  
+  // Detener animación del tutorial
+  const stopTutorialAnimation = async () => {
+    try {
+      tutorialArrowPosition.current.stopAnimation();
+      Animated.timing(tutorialArrowPosition.current, {
+        toValue: 0,
+        duration: 200,
+        useNativeDriver: true,
+      }).start();
+      await AsyncStorage.setItem('menuToggleTutorialCompleted', 'true');
+      setShowTutorial(false);
+    } catch (error) {
+      console.error('Error saving tutorial status:', error);
+    }
+  };
   const { leads, pagination, loading, error, refetch, goToPage } = useFacebookLeads({
     clientId: clientId || 0,
     page: currentPage,
     limit,
   });
   const { deleteLead, loading: deleting } = useLeadOperations();
+
+  // Inicializar estados del cliente desde los leads cargados
+  useEffect(() => {
+    const initialStatuses: { [key: number]: string } = {};
+    leads.forEach(lead => {
+      if (lead.clientStatus) {
+        // El backend devuelve valores como "Trabajo terminado", pero el frontend usa códigos
+        // Mapear del backend al frontend para mantener consistencia
+        const frontendStatus = Object.entries({
+          'No contestó': 'no-contest',
+          'Cita Agendada': 'appointment',
+          'Por recontactar': 'recontact',
+          'Estimado vendido': 'estimated-sold',
+          'Trabajo terminado': 'work-completed',
+        }).find(([backend]) => backend === lead.clientStatus)?.[1] || lead.clientStatus;
+        initialStatuses[lead.id] = frontendStatus;
+      }
+    });
+    setClientStatuses(prev => ({ ...prev, ...initialStatuses }));
+  }, [leads]);
 
   // Debounce para la búsqueda
   useEffect(() => {
@@ -164,8 +279,34 @@ export const FacebookLeadsList = forwardRef<FacebookLeadsListRef, FacebookLeadsL
   };
 
   const toggleMenu = (leadId: number) => {
+    // Si es la primera vez que se presiona, detener el tutorial
+    if (showTutorial) {
+      stopTutorialAnimation();
+    }
+    
     if (expandedLeadId === leadId) {
-      // Cerrar menú
+      // Cerrar submenús primero si están abiertos
+      if (expandedQuickResponse === leadId && quickResponseHeights.current[leadId]) {
+        Animated.timing(quickResponseHeights.current[leadId], {
+          toValue: 0,
+          duration: 300,
+          useNativeDriver: false,
+        }).start(() => {
+          setExpandedQuickResponse(null);
+        });
+      }
+      
+      if (expandedClientStatus === leadId && clientStatusHeights.current[leadId]) {
+        Animated.timing(clientStatusHeights.current[leadId], {
+          toValue: 0,
+          duration: 300,
+          useNativeDriver: false,
+        }).start(() => {
+          setExpandedClientStatus(null);
+        });
+      }
+      
+      // Cerrar menú principal
       if (animatedHeights.current[leadId]) {
         Animated.timing(animatedHeights.current[leadId], {
           toValue: 0,
@@ -178,13 +319,39 @@ export const FacebookLeadsList = forwardRef<FacebookLeadsListRef, FacebookLeadsL
         setExpandedLeadId(null);
       }
     } else {
-      // Cerrar el menú anterior si hay uno abierto
-      if (expandedLeadId !== null && animatedHeights.current[expandedLeadId]) {
-        Animated.timing(animatedHeights.current[expandedLeadId], {
-          toValue: 0,
-          duration: 300,
-          useNativeDriver: false,
-        }).start();
+      // Cerrar el menú anterior si hay uno abierto (incluyendo sus submenús)
+      if (expandedLeadId !== null) {
+        const previousLeadId = expandedLeadId;
+        
+        // Cerrar submenús del menú anterior
+        if (expandedQuickResponse === previousLeadId && quickResponseHeights.current[previousLeadId]) {
+          Animated.timing(quickResponseHeights.current[previousLeadId], {
+            toValue: 0,
+            duration: 300,
+            useNativeDriver: false,
+          }).start(() => {
+            setExpandedQuickResponse(null);
+          });
+        }
+        
+        if (expandedClientStatus === previousLeadId && clientStatusHeights.current[previousLeadId]) {
+          Animated.timing(clientStatusHeights.current[previousLeadId], {
+            toValue: 0,
+            duration: 300,
+            useNativeDriver: false,
+          }).start(() => {
+            setExpandedClientStatus(null);
+          });
+        }
+        
+        // Cerrar menú principal anterior
+        if (animatedHeights.current[previousLeadId]) {
+          Animated.timing(animatedHeights.current[previousLeadId], {
+            toValue: 0,
+            duration: 300,
+            useNativeDriver: false,
+          }).start();
+        }
       }
       
       // Inicializar animación si no existe y asegurar que esté en 0
@@ -212,6 +379,28 @@ export const FacebookLeadsList = forwardRef<FacebookLeadsListRef, FacebookLeadsL
   };
 
   const closeMenu = (leadId: number) => {
+    // Cerrar submenús primero si están abiertos
+    if (expandedQuickResponse === leadId && quickResponseHeights.current[leadId]) {
+      Animated.timing(quickResponseHeights.current[leadId], {
+        toValue: 0,
+        duration: 300,
+        useNativeDriver: false,
+      }).start(() => {
+        setExpandedQuickResponse(null);
+      });
+    }
+    
+    if (expandedClientStatus === leadId && clientStatusHeights.current[leadId]) {
+      Animated.timing(clientStatusHeights.current[leadId], {
+        toValue: 0,
+        duration: 300,
+        useNativeDriver: false,
+      }).start(() => {
+        setExpandedClientStatus(null);
+      });
+    }
+    
+    // Cerrar menú principal
     if (animatedHeights.current[leadId]) {
       Animated.timing(animatedHeights.current[leadId], {
         toValue: 0,
@@ -298,6 +487,185 @@ export const FacebookLeadsList = forwardRef<FacebookLeadsListRef, FacebookLeadsL
     }
   };
 
+  const handleCallLead = (phoneNumber: string) => {
+    if (!phoneNumber) {
+      Alert.alert('Error', 'Este lead no tiene un número de teléfono');
+      return;
+    }
+
+    // Limpiar el número de teléfono (quitar espacios, guiones, etc.)
+    const cleanPhone = phoneNumber.replace(/[\s\-\(\)]/g, '');
+    const phoneUrl = `tel:${cleanPhone}`;
+
+    Linking.openURL(phoneUrl).catch((err) => {
+      Alert.alert('Error', 'No se pudo abrir la aplicación de llamadas');
+      console.error('Error al abrir tel:', err);
+    });
+  };
+
+  const handleEmailLead = (email: string) => {
+    if (!email) {
+      Alert.alert('Error', 'Este lead no tiene un email');
+      return;
+    }
+
+    const emailUrl = `mailto:${email}`;
+
+    Linking.openURL(emailUrl).catch((err) => {
+      Alert.alert('Error', 'No se pudo abrir la aplicación de email');
+      console.error('Error al abrir email:', err);
+    });
+  };
+
+  const handleCopyPhone = async (phoneNumber: string) => {
+    try {
+      if (Platform.OS === 'web') {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          await navigator.clipboard.writeText(phoneNumber);
+          Alert.alert('Copiado', 'Número de teléfono copiado al portapapeles');
+        } else {
+          const textArea = document.createElement('textarea');
+          textArea.value = phoneNumber;
+          textArea.style.position = 'fixed';
+          textArea.style.opacity = '0';
+          document.body.appendChild(textArea);
+          textArea.select();
+          document.execCommand('copy');
+          document.body.removeChild(textArea);
+          Alert.alert('Copiado', 'Número de teléfono copiado al portapapeles');
+        }
+      } else {
+        try {
+          const Clipboard = require('@react-native-clipboard/clipboard').default;
+          Clipboard.setString(phoneNumber);
+          Alert.alert('Copiado', 'Número de teléfono copiado al portapapeles');
+        } catch {
+          Alert.alert('Info', 'Selecciona el número y cópialo manualmente');
+        }
+      }
+    } catch (error) {
+      Alert.alert('Error', 'No se pudo copiar el número');
+    }
+  };
+
+  const handleCopyEmail = async (email: string) => {
+    try {
+      if (Platform.OS === 'web') {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          await navigator.clipboard.writeText(email);
+          Alert.alert('Copiado', 'Email copiado al portapapeles');
+        } else {
+          const textArea = document.createElement('textarea');
+          textArea.value = email;
+          textArea.style.position = 'fixed';
+          textArea.style.opacity = '0';
+          document.body.appendChild(textArea);
+          textArea.select();
+          document.execCommand('copy');
+          document.body.removeChild(textArea);
+          Alert.alert('Copiado', 'Email copiado al portapapeles');
+        }
+      } else {
+        try {
+          const Clipboard = require('@react-native-clipboard/clipboard').default;
+          Clipboard.setString(email);
+          Alert.alert('Copiado', 'Email copiado al portapapeles');
+        } catch {
+          Alert.alert('Info', 'Selecciona el email y cópialo manualmente');
+        }
+      }
+    } catch (error) {
+      Alert.alert('Error', 'No se pudo copiar el email');
+    }
+  };
+
+  const handleSendSMS = async (leadId: number) => {
+    try {
+      setGeneratingSMS(leadId);
+      
+      // Verificar cache primero
+      const cachedContent = await getCachedContent(leadId, 'sms', 'ingles');
+      if (cachedContent) {
+        console.log('✅ Usando contenido del cache para SMS');
+        showContentModal(cachedContent, 'sms', 'ingles', leadId);
+        setGeneratingSMS(null);
+        return;
+      }
+      
+      // Si no hay cache, generar nuevo contenido
+      console.log('🔄 Generando nuevo contenido de SMS...');
+      const result = await facebookLeadsService.generateContent(leadId, 'sms', 'ingles');
+      
+      // Guardar en cache
+      await setCachedContent(leadId, 'sms', 'ingles', result.content);
+      
+      showContentModal(result.content, 'sms', 'ingles', leadId);
+    } catch (error: any) {
+      Alert.alert('Error', error.response?.data?.message || error.message || 'No se pudo generar el SMS');
+    } finally {
+      setGeneratingSMS(null);
+    }
+  };
+
+  const handleSendWhatsApp = (phoneNumber: string) => {
+    if (!phoneNumber) {
+      Alert.alert('Error', 'Este lead no tiene un número de teléfono');
+      return;
+    }
+
+    // Limpiar el número de teléfono (quitar espacios, guiones, paréntesis, etc.)
+    let cleanPhone = phoneNumber.replace(/[\s\-\(\)]/g, '');
+    
+    // Si el número ya tiene código de país (empieza con +), mantenerlo
+    // Si no tiene código de país, agregar +54 para Argentina
+    if (!cleanPhone.startsWith('+')) {
+      // Si empieza con 54, agregar el +
+      if (cleanPhone.startsWith('54')) {
+        cleanPhone = `+${cleanPhone}`;
+      } else {
+        // Si no tiene código de país, agregar +54
+        cleanPhone = `+54${cleanPhone}`;
+      }
+    }
+    
+    // Remover el + para la URL de WhatsApp (wa.me no necesita el +)
+    const whatsappPhone = cleanPhone.replace(/\+/g, '');
+    const whatsappUrl = `https://wa.me/${whatsappPhone}`;
+
+    Linking.openURL(whatsappUrl).catch((err) => {
+      Alert.alert('Error', 'No se pudo abrir WhatsApp');
+      console.error('Error al abrir WhatsApp:', err);
+    });
+  };
+
+  const handleSendEmail = async (leadId: number) => {
+    try {
+      setGeneratingEmail(leadId);
+      
+      // Verificar cache primero
+      const cachedContent = await getCachedContent(leadId, 'email', 'ingles');
+      if (cachedContent) {
+        console.log('✅ Usando contenido del cache para email');
+        showContentModal(cachedContent, 'email', 'ingles', leadId);
+        setGeneratingEmail(null);
+        return;
+      }
+      
+      // Si no hay cache, generar nuevo contenido
+      console.log('🔄 Generando nuevo contenido de email...');
+      const result = await facebookLeadsService.generateContent(leadId, 'email', 'ingles');
+      
+      // Guardar en cache
+      await setCachedContent(leadId, 'email', 'ingles', result.content);
+      
+      showContentModal(result.content, 'email', 'ingles', leadId);
+    } catch (error: any) {
+      Alert.alert('Error', error.response?.data?.message || error.message || 'No se pudo generar el email');
+    } finally {
+      setGeneratingEmail(null);
+    }
+  };
+
   const handleCopyToClipboard = async () => {
     try {
       if (Platform.OS === 'web') {
@@ -341,7 +709,23 @@ export const FacebookLeadsList = forwardRef<FacebookLeadsListRef, FacebookLeadsL
     setModalLoading(true);
     
     try {
+      // Verificar cache primero
+      const cachedContent = await getCachedContent(modalLeadId, modalType, newLanguage);
+      if (cachedContent) {
+        console.log('✅ Usando contenido del cache para cambio de idioma');
+        setModalContent(cachedContent);
+        setModalLanguage(newLanguage);
+        setModalLoading(false);
+        return;
+      }
+      
+      // Si no hay cache, generar nuevo contenido
+      console.log('🔄 Generando nuevo contenido para cambio de idioma...');
       const result = await facebookLeadsService.generateContent(modalLeadId, modalType, newLanguage);
+      
+      // Guardar en cache
+      await setCachedContent(modalLeadId, modalType, newLanguage, result.content);
+      
       setModalContent(result.content);
       setModalLanguage(newLanguage);
     } catch (error: any) {
@@ -359,6 +743,54 @@ export const FacebookLeadsList = forwardRef<FacebookLeadsListRef, FacebookLeadsL
     setModalLeadId(null);
   };
 
+  // Funciones de cache para contenido generado
+  const getCacheKey = (leadId: number, type: 'email' | 'sms' | 'call', language: 'español' | 'ingles'): string => {
+    return `generated-content-${leadId}-${type}-${language}`;
+  };
+
+  const getCachedContent = async (leadId: number, type: 'email' | 'sms' | 'call', language: 'español' | 'ingles'): Promise<string | null> => {
+    try {
+      const cacheKey = getCacheKey(leadId, type, language);
+      console.log('🔍 Buscando en cache:', cacheKey);
+      const cached = await AsyncStorage.getItem(cacheKey);
+      if (cached && cached.trim().length > 0) {
+        console.log('✅ Cache hit para:', cacheKey);
+        console.log('✅ Contenido del cache (primeros 100 chars):', cached.substring(0, 100));
+        return cached;
+      }
+      console.log('❌ Cache miss para:', cacheKey);
+      console.log('❌ Valor obtenido:', cached ? `"${cached}" (length: ${cached.length})` : 'null');
+      return null;
+    } catch (error) {
+      console.error('❌ Error obteniendo cache:', error);
+      return null;
+    }
+  };
+
+  const setCachedContent = async (leadId: number, type: 'email' | 'sms' | 'call', language: 'español' | 'ingles', content: string): Promise<void> => {
+    try {
+      if (!content || content.trim().length === 0) {
+        console.warn('⚠️ Intento de guardar contenido vacío en cache');
+        return;
+      }
+      const cacheKey = getCacheKey(leadId, type, language);
+      await AsyncStorage.setItem(cacheKey, content);
+      console.log('💾 Contenido guardado en cache:', cacheKey);
+      console.log('💾 Tamaño del contenido:', content.length, 'caracteres');
+      console.log('💾 Primeros 100 chars:', content.substring(0, 100));
+      
+      // Verificar que se guardó correctamente
+      const verify = await AsyncStorage.getItem(cacheKey);
+      if (verify === content) {
+        console.log('✅ Verificación: Cache guardado correctamente');
+      } else {
+        console.error('❌ Verificación: El cache no se guardó correctamente');
+      }
+    } catch (error) {
+      console.error('❌ Error guardando en cache:', error);
+    }
+  };
+
   const showContentModal = (content: string, type: 'email' | 'sms' | 'call', language: 'español' | 'ingles', leadId: number) => {
     setModalContent(content);
     setModalType(type);
@@ -370,7 +802,24 @@ export const FacebookLeadsList = forwardRef<FacebookLeadsListRef, FacebookLeadsL
   const handleGenerateEmail = async (leadId: number, language: 'español' | 'ingles' = 'español') => {
     try {
       setGeneratingEmail(leadId);
+      
+      // Verificar cache primero
+      const cachedContent = await getCachedContent(leadId, 'email', language);
+      if (cachedContent) {
+        console.log('✅ Usando contenido del cache para email');
+        showContentModal(cachedContent, 'email', language, leadId);
+        setGeneratingEmail(null);
+        closeMenu(leadId);
+        return;
+      }
+      
+      // Si no hay cache, generar nuevo contenido
+      console.log('🔄 Generando nuevo contenido de email...');
       const result = await facebookLeadsService.generateContent(leadId, 'email', language);
+      
+      // Guardar en cache
+      await setCachedContent(leadId, 'email', language, result.content);
+      
       showContentModal(result.content, 'email', language, leadId);
     } catch (error: any) {
       Alert.alert('Error', error.response?.data?.message || error.message || 'No se pudo generar el email');
@@ -383,7 +832,24 @@ export const FacebookLeadsList = forwardRef<FacebookLeadsListRef, FacebookLeadsL
   const handleText = async (leadId: number) => {
     try {
       setGeneratingSMS(leadId);
+      
+      // Verificar cache primero
+      const cachedContent = await getCachedContent(leadId, 'sms', 'ingles');
+      if (cachedContent) {
+        console.log('✅ Usando contenido del cache para SMS');
+        showContentModal(cachedContent, 'sms', 'ingles', leadId);
+        setGeneratingSMS(null);
+        closeMenu(leadId);
+        return;
+      }
+      
+      // Si no hay cache, generar nuevo contenido
+      console.log('🔄 Generando nuevo contenido de SMS...');
       const result = await facebookLeadsService.generateContent(leadId, 'sms', 'ingles');
+      
+      // Guardar en cache
+      await setCachedContent(leadId, 'sms', 'ingles', result.content);
+      
       showContentModal(result.content, 'sms', 'ingles', leadId);
     } catch (error: any) {
       Alert.alert('Error', error.response?.data?.message || error.message || 'No se pudo generar el SMS');
@@ -396,7 +862,24 @@ export const FacebookLeadsList = forwardRef<FacebookLeadsListRef, FacebookLeadsL
   const handleCall = async (leadId: number) => {
     try {
       setGeneratingCall(leadId);
+      
+      // Verificar cache primero
+      const cachedContent = await getCachedContent(leadId, 'call', 'ingles');
+      if (cachedContent) {
+        console.log('✅ Usando contenido del cache para call');
+        showContentModal(cachedContent, 'call', 'ingles', leadId);
+        setGeneratingCall(null);
+        closeMenu(leadId);
+        return;
+      }
+      
+      // Si no hay cache, generar nuevo contenido
+      console.log('🔄 Generando nuevo contenido de call...');
       const result = await facebookLeadsService.generateContent(leadId, 'call', 'ingles');
+      
+      // Guardar en cache
+      await setCachedContent(leadId, 'call', 'ingles', result.content);
+      
       showContentModal(result.content, 'call', 'ingles', leadId);
     } catch (error: any) {
       Alert.alert('Error', error.response?.data?.message || error.message || 'No se pudo generar el script de llamada');
@@ -475,49 +958,163 @@ export const FacebookLeadsList = forwardRef<FacebookLeadsListRef, FacebookLeadsL
     return statusMap[status] || status;
   };
 
-  const handleClientStatusOption = (leadId: number, status: string) => {
+  const getStatusColor = (status: string): string => {
+    const statusColorMap: { [key: string]: string } = {
+      'no-contest': '#fca5a5', // Rojo medio
+      'appointment': '#fcd34d', // Amarillo medio
+      'recontact': '#93c5fd', // Azul medio
+      'estimated-sold': '#6ee7b7', // Verde medio
+      'work-completed': '#a5b4fc', // Índigo/Morado medio
+    };
+    return statusColorMap[status] || colors.textSecondary;
+  };
+
+  // Mapear código del frontend al valor que espera el backend
+  const mapStatusToBackend = (status: string): string => {
+    const statusMap: { [key: string]: string } = {
+      'no-contest': 'No contestó',
+      'appointment': 'Cita Agendada',
+      'recontact': 'Por recontactar',
+      'estimated-sold': 'Estimado vendido',
+      'work-completed': 'Trabajo terminado',
+    };
+    return statusMap[status] || status;
+  };
+
+  const handleClientStatusOption = async (leadId: number, status: string) => {
+    console.log('🔵 handleClientStatusOption: Iniciando...');
+    console.log('🔵 handleClientStatusOption: leadId:', leadId);
+    console.log('🔵 handleClientStatusOption: status:', status);
+    
     if (status === 'appointment' || status === 'recontact') {
+      console.log('🔵 handleClientStatusOption: Abriendo modal de fecha/hora para:', status);
       setDateTimeModalType(status === 'appointment' ? 'appointment' : 'recontact');
       setModalLeadId(leadId);
       setSelectedDate(new Date());
       setSelectedTime('');
       setDateTimeModalVisible(true);
     } else {
-      // Guardar el estado seleccionado
-      setClientStatuses(prev => ({ ...prev, [leadId]: status }));
-      Alert.alert(
-        'Estado del Cliente',
-        `Estado actualizado a: ${getStatusLabel(status)}`,
-        [
-          { text: 'OK', onPress: () => closeMenu(leadId) },
-        ]
-      );
+      try {
+        console.log('🔵 handleClientStatusOption: Llamando a updateClientStatus...');
+        // Mapear el código del frontend al valor que espera el backend
+        const backendStatus = mapStatusToBackend(status);
+        console.log('🔵 handleClientStatusOption: status frontend:', status);
+        console.log('🔵 handleClientStatusOption: status backend:', backendStatus);
+        // Actualizar estado en el backend
+        const updatedLead = await facebookLeadsService.updateClientStatus(leadId, backendStatus);
+        
+        console.log('✅ handleClientStatusOption: Lead actualizado exitosamente:', updatedLead);
+        console.log('✅ handleClientStatusOption: clientStatus actualizado:', updatedLead.clientStatus);
+        
+        // Actualizar estado local
+        setClientStatuses(prev => ({ ...prev, [leadId]: status }));
+        console.log('✅ handleClientStatusOption: Estado local actualizado');
+        
+        // Cerrar el menú de estado del cliente
+        if (expandedClientStatus === leadId && clientStatusHeights.current[leadId]) {
+          Animated.timing(clientStatusHeights.current[leadId], {
+            toValue: 0,
+            duration: 300,
+            useNativeDriver: false,
+          }).start(() => {
+            setExpandedClientStatus(null);
+          });
+        }
+        
+        Alert.alert(
+          'Estado del Cliente',
+          `Estado actualizado a: ${getStatusLabel(status)}`,
+          [
+            { text: 'OK', onPress: () => closeMenu(leadId) },
+          ]
+        );
+      } catch (error: any) {
+        console.error('❌ handleClientStatusOption: Error actualizando estado del cliente:', error);
+        console.error('❌ handleClientStatusOption: Error details:', {
+          message: error?.message,
+          response: error?.response?.data,
+          status: error?.response?.status,
+        });
+        Alert.alert(
+          'Error',
+          error.response?.data?.message || 'No se pudo actualizar el estado del cliente',
+          [{ text: 'OK' }]
+        );
+      }
     }
   };
 
-  const handleSaveDateTime = () => {
+  const handleSaveDateTime = async () => {
+    console.log('🟢 handleSaveDateTime: Iniciando...');
+    console.log('🟢 handleSaveDateTime: selectedTime:', selectedTime);
+    console.log('🟢 handleSaveDateTime: selectedDate:', selectedDate);
+    console.log('🟢 handleSaveDateTime: modalLeadId:', modalLeadId);
+    console.log('🟢 handleSaveDateTime: dateTimeModalType:', dateTimeModalType);
+    
     if (!selectedTime) {
+      console.warn('⚠️ handleSaveDateTime: No hay hora seleccionada');
       Alert.alert('Error', 'Por favor selecciona una hora');
       return;
     }
-    // Guardar el estado con la fecha y hora
-    if (modalLeadId && dateTimeModalType) {
-      setClientStatuses(prev => ({ ...prev, [modalLeadId]: dateTimeModalType }));
+    
+    if (!modalLeadId || !dateTimeModalType) {
+      console.error('❌ handleSaveDateTime: Faltan datos requeridos');
+      Alert.alert('Error', 'No se pudo identificar el lead');
+      return;
     }
-    // TODO: Implementar guardado en backend
-    Alert.alert(
-      'Éxito',
-      `${dateTimeModalType === 'appointment' ? 'Cita agendada' : 'Por recontactar'} para ${selectedDate.toLocaleDateString()} a las ${selectedTime}`,
-      [
-        { text: 'OK', onPress: () => {
-          setDateTimeModalVisible(false);
-          setDateTimeModalType(null);
-          if (modalLeadId) {
+
+    try {
+      console.log('🟢 handleSaveDateTime: Llamando a updateClientStatus...');
+      // Mapear el código del frontend al valor que espera el backend
+      const backendStatus = mapStatusToBackend(dateTimeModalType);
+      console.log('🟢 handleSaveDateTime: dateTimeModalType frontend:', dateTimeModalType);
+      console.log('🟢 handleSaveDateTime: status backend:', backendStatus);
+      // Actualizar estado en el backend
+      const updatedLead = await facebookLeadsService.updateClientStatus(modalLeadId, backendStatus);
+      
+      console.log('✅ handleSaveDateTime: Lead actualizado exitosamente:', updatedLead);
+      console.log('✅ handleSaveDateTime: clientStatus actualizado:', updatedLead.clientStatus);
+      
+      // Actualizar estado local
+      setClientStatuses(prev => ({ ...prev, [modalLeadId]: dateTimeModalType }));
+      console.log('✅ handleSaveDateTime: Estado local actualizado');
+      
+      // Cerrar el menú de estado del cliente
+      if (modalLeadId && expandedClientStatus === modalLeadId && clientStatusHeights.current[modalLeadId]) {
+        Animated.timing(clientStatusHeights.current[modalLeadId], {
+          toValue: 0,
+          duration: 300,
+          useNativeDriver: false,
+        }).start(() => {
+          setExpandedClientStatus(null);
+        });
+      }
+      
+      Alert.alert(
+        'Éxito',
+        `${dateTimeModalType === 'appointment' ? 'Cita agendada' : 'Por recontactar'} para ${selectedDate.toLocaleDateString()} a las ${selectedTime}`,
+        [
+          { text: 'OK', onPress: () => {
+            console.log('🟢 handleSaveDateTime: Cerrando modal y menú');
+            setDateTimeModalVisible(false);
+            setDateTimeModalType(null);
             closeMenu(modalLeadId);
-          }
-        }},
-      ]
-    );
+          }},
+        ]
+      );
+    } catch (error: any) {
+      console.error('❌ handleSaveDateTime: Error guardando fecha y hora:', error);
+      console.error('❌ handleSaveDateTime: Error details:', {
+        message: error?.message,
+        response: error?.response?.data,
+        status: error?.response?.status,
+      });
+      Alert.alert(
+        'Error',
+        error.response?.data?.message || 'No se pudo guardar la fecha y hora',
+        [{ text: 'OK' }]
+      );
+    }
   };
 
   const handleRequestReview = async (leadId: number) => {
@@ -798,22 +1395,106 @@ export const FacebookLeadsList = forwardRef<FacebookLeadsListRef, FacebookLeadsL
                         <Text style={styles.infoText}>{lead.name}</Text>
                       </View>
                     )}
-                    {(lead.phoneManual || lead.phoneAuto) && (
-                      <View style={styles.infoRow}>
-                        <Ionicons name="call-outline" size={16} color={colors.textSecondary} />
-                        <Text style={styles.infoText}>{lead.phoneManual || lead.phoneAuto}</Text>
-                      </View>
-                    )}
+                    {(() => {
+                      const phone = lead.phone || lead.phoneManual || lead.phoneAuto;
+                      const phoneAuto = lead.phoneAuto;
+                      const phoneManual = lead.phoneManual;
+                      const hasBoth = phoneAuto && phoneManual && phoneAuto !== phoneManual;
+                      
+                      if (!phone) return null;
+                      
+                      if (hasBoth) {
+                        // Mostrar ambos teléfonos si son diferentes
+                        return (
+                          <>
+                            <View style={styles.infoRow}>
+                              <TouchableOpacity
+                                style={styles.infoRowContent}
+                                onPress={() => handleCallLead(phoneAuto || '')}
+                                activeOpacity={0.7}
+                              >
+                                <Ionicons name="call-outline" size={16} color={colors.textSecondary} />
+                                <Text style={styles.infoText}>{phoneAuto}</Text>
+                                <TouchableOpacity
+                                  onPress={(e) => {
+                                    e.stopPropagation();
+                                    handleCopyPhone(phoneAuto || '');
+                                  }}
+                                  activeOpacity={0.7}
+                                  style={styles.copyIconButton}
+                                >
+                                  <Ionicons name="copy-outline" size={16} color={colors.textSecondary} />
+                                </TouchableOpacity>
+                              </TouchableOpacity>
+                            </View>
+                            <View style={styles.infoRow}>
+                              <TouchableOpacity
+                                style={styles.infoRowContent}
+                                onPress={() => handleCallLead(phoneManual || '')}
+                                activeOpacity={0.7}
+                              >
+                                <Ionicons name="call-outline" size={16} color={colors.textSecondary} />
+                                <Text style={styles.infoText}>{phoneManual}</Text>
+                                <TouchableOpacity
+                                  onPress={(e) => {
+                                    e.stopPropagation();
+                                    handleCopyPhone(phoneManual || '');
+                                  }}
+                                  activeOpacity={0.7}
+                                  style={styles.copyIconButton}
+                                >
+                                  <Ionicons name="copy-outline" size={16} color={colors.textSecondary} />
+                                </TouchableOpacity>
+                              </TouchableOpacity>
+                            </View>
+                          </>
+                        );
+                      } else {
+                        // Mostrar solo uno si son iguales o solo hay uno
+                        return (
+                          <View style={styles.infoRow}>
+                            <TouchableOpacity
+                              style={styles.infoRowContent}
+                              onPress={() => handleCallLead(phone || '')}
+                              activeOpacity={0.7}
+                            >
+                              <Ionicons name="call-outline" size={16} color={colors.textSecondary} />
+                              <Text style={styles.infoText}>{phone}</Text>
+                              <TouchableOpacity
+                                onPress={(e) => {
+                                  e.stopPropagation();
+                                  handleCopyPhone(phone || '');
+                                }}
+                                activeOpacity={0.7}
+                                style={styles.copyIconButton}
+                              >
+                                <Ionicons name="copy-outline" size={16} color={colors.textSecondary} />
+                              </TouchableOpacity>
+                            </TouchableOpacity>
+                          </View>
+                        );
+                      }
+                    })()}
                     {lead.email && (
                       <View style={styles.infoRow}>
-                        <Ionicons name="mail-outline" size={16} color={colors.textSecondary} />
-                        <Text style={styles.infoText}>{lead.email}</Text>
-                      </View>
-                    )}
-                    {lead.project && (
-                      <View style={styles.infoRow}>
-                        <Ionicons name="home-outline" size={16} color={colors.textSecondary} />
-                        <Text style={styles.infoText}>{lead.project}</Text>
+                        <TouchableOpacity
+                          style={styles.infoRowContent}
+                          onPress={() => handleEmailLead(lead.email || '')}
+                          activeOpacity={0.7}
+                        >
+                          <Ionicons name="mail-outline" size={16} color={colors.textSecondary} />
+                          <Text style={styles.infoText}>{lead.email}</Text>
+                          <TouchableOpacity
+                            onPress={(e) => {
+                              e.stopPropagation();
+                              handleCopyEmail(lead.email || '');
+                            }}
+                            activeOpacity={0.7}
+                            style={styles.copyIconButton}
+                          >
+                            <Ionicons name="copy-outline" size={16} color={colors.textSecondary} />
+                          </TouchableOpacity>
+                        </TouchableOpacity>
                       </View>
                     )}
                     {lead.city && (
@@ -822,27 +1503,158 @@ export const FacebookLeadsList = forwardRef<FacebookLeadsListRef, FacebookLeadsL
                         <Text style={styles.infoText}>{lead.city}</Text>
                       </View>
                     )}
+                    {lead.preferredContactMethod && (
+                      <View style={styles.infoRow}>
+                        <Ionicons name="chatbubble-ellipses-outline" size={16} color={colors.textSecondary} />
+                        <Text style={styles.infoText}>Contacto: {lead.preferredContactMethod}</Text>
+                      </View>
+                    )}
+                    {lead.project && (
+                      <View style={styles.infoRow}>
+                        <Ionicons name="home-outline" size={16} color={colors.textSecondary} />
+                        <Text style={styles.infoText}>{lead.project}</Text>
+                      </View>
+                    )}
+                    {lead.estimatedTimeToStart && (
+                      <View style={styles.infoRow}>
+                        <Ionicons name="calendar-outline" size={16} color={colors.textSecondary} />
+                        <Text style={styles.infoText}>Inicio estimado: {lead.estimatedTimeToStart}</Text>
+                      </View>
+                    )}
+                    {lead.availableBudget && (
+                      <View style={styles.infoRow}>
+                        <Ionicons name="cash-outline" size={16} color={colors.textSecondary} />
+                        <Text style={styles.infoText}>Presupuesto: {lead.availableBudget}</Text>
+                      </View>
+                    )}
+                    {lead.extraInfo && (
+                      <View style={styles.infoRow}>
+                        <Ionicons name="information-circle-outline" size={16} color={colors.textSecondary} />
+                        <Text style={styles.infoText}>{lead.extraInfo}</Text>
+                      </View>
+                    )}
                     <View style={styles.infoRow}>
                       <Ionicons name="time-outline" size={16} color={colors.textSecondary} />
                       <Text style={styles.dateText}>{formatDate(lead.createdAt)}</Text>
                     </View>
                     <View style={styles.infoRow}>
-                      <Ionicons name="information-circle-outline" size={16} color={colors.textSecondary} />
+                      {(() => {
+                        const currentStatus = clientStatuses[lead.id] || (lead.clientStatus ? (() => {
+                          // Mapear del backend al frontend si viene en formato del backend
+                          const backendToFrontend: { [key: string]: string } = {
+                            'No contestó': 'no-contest',
+                            'Cita Agendada': 'appointment',
+                            'Por recontactar': 'recontact',
+                            'Estimado vendido': 'estimated-sold',
+                            'Trabajo terminado': 'work-completed',
+                          };
+                          return backendToFrontend[lead.clientStatus] || lead.clientStatus;
+                        })() : 'appointment');
+                        const statusColor = getStatusColor(currentStatus);
+                        return (
+                          <View style={[styles.statusIndicator, { 
+                            backgroundColor: statusColor,
+                            borderColor: statusColor,
+                          }]} />
+                        );
+                      })()}
                       <Text style={styles.statusTextInfo}>
-                        Estado: {clientStatuses[lead.id] ? getStatusLabel(clientStatuses[lead.id]) : 'Agendado'}
+                        Estado: {clientStatuses[lead.id] ? getStatusLabel(clientStatuses[lead.id]) : (lead.clientStatus ? (() => {
+                          // Mapear del backend al frontend si viene en formato del backend
+                          const backendToFrontend: { [key: string]: string } = {
+                            'No contestó': 'no-contest',
+                            'Cita Agendada': 'appointment',
+                            'Por recontactar': 'recontact',
+                            'Estimado vendido': 'estimated-sold',
+                            'Trabajo terminado': 'work-completed',
+                          };
+                          const frontendStatus = backendToFrontend[lead.clientStatus] || lead.clientStatus;
+                          return getStatusLabel(frontendStatus);
+                        })() : 'Agendado')}
                       </Text>
                     </View>
                   </View>
+                  <View style={styles.tutorialContainer}>
+                    <TouchableOpacity
+                      style={styles.menuToggleButton}
+                      onPress={() => toggleMenu(lead.id)}
+                      activeOpacity={0.7}
+                    >
+                      <Ionicons 
+                        name={isExpanded ? "chevron-up-outline" : "chevron-down-outline"} 
+                        size={20} 
+                        color="#fff" 
+                      />
+                    </TouchableOpacity>
+                    {showTutorial && (
+                      <Animated.View
+                        style={[
+                          styles.tutorialArrow,
+                          {
+                            transform: [
+                              {
+                                translateY: tutorialArrowPosition.current,
+                              },
+                            ],
+                          },
+                        ]}
+                      >
+                        <Ionicons 
+                          name="arrow-up" 
+                          size={24} 
+                          color={colors.primary} 
+                        />
+                      </Animated.View>
+                    )}
+                  </View>
+                </View>
+                <View style={styles.actionButtonsRow}>
                   <TouchableOpacity
-                    style={styles.menuToggleButton}
-                    onPress={() => toggleMenu(lead.id)}
+                    style={[styles.actionButton, styles.callButton]}
+                    onPress={() => handleCallLead(lead.phone || lead.phoneManual || lead.phoneAuto || '')}
+                    disabled={!lead.phone && !lead.phoneManual && !lead.phoneAuto}
                     activeOpacity={0.7}
                   >
-                    <Ionicons 
-                      name={isExpanded ? "chevron-up-outline" : "chevron-down-outline"} 
-                      size={20} 
-                      color="#fff" 
-                    />
+                    <Ionicons name="call-outline" size={20} color={colors.primary} />
+                    <Text style={styles.actionButtonText}>Llamar</Text>
+                  </TouchableOpacity>
+                  {user?.userClientData?.country === 'Argentina' ? (
+                    <TouchableOpacity
+                      style={[styles.actionButton, styles.smsButton]}
+                      onPress={() => handleSendWhatsApp(lead.phone || lead.phoneManual || lead.phoneAuto || '')}
+                      disabled={!lead.phone && !lead.phoneManual && !lead.phoneAuto}
+                      activeOpacity={0.7}
+                    >
+                      <Ionicons name="logo-whatsapp" size={20} color={colors.primary} />
+                      <Text style={styles.actionButtonText}>Whats</Text>
+                    </TouchableOpacity>
+                  ) : (
+                    <TouchableOpacity
+                      style={[styles.actionButton, styles.smsButton]}
+                      onPress={() => handleSendSMS(lead.id)}
+                      disabled={generatingSMS === lead.id}
+                      activeOpacity={0.7}
+                    >
+                      {generatingSMS === lead.id ? (
+                        <ActivityIndicator size="small" color={colors.primary} />
+                      ) : (
+                        <Ionicons name="chatbubble-outline" size={20} color={colors.primary} />
+                      )}
+                      <Text style={styles.actionButtonText}>SMS</Text>
+                    </TouchableOpacity>
+                  )}
+                  <TouchableOpacity
+                    style={[styles.actionButton, styles.emailButton]}
+                    onPress={() => handleSendEmail(lead.id)}
+                    disabled={generatingEmail === lead.id}
+                    activeOpacity={0.7}
+                  >
+                    {generatingEmail === lead.id ? (
+                      <ActivityIndicator size="small" color={colors.primary} />
+                    ) : (
+                      <Ionicons name="mail-outline" size={20} color={colors.primary} />
+                    )}
+                    <Text style={styles.actionButtonText}>Email</Text>
                   </TouchableOpacity>
                 </View>
                 {/* Menú desplegable animado */}
@@ -907,19 +1719,34 @@ export const FacebookLeadsList = forwardRef<FacebookLeadsListRef, FacebookLeadsL
                               )}
                               <Text style={styles.menuItemText}>Email</Text>
                             </TouchableOpacity>
-                            <TouchableOpacity
-                              style={styles.menuItem}
-                              onPress={() => handleText(lead.id)}
-                              disabled={generatingSMS === lead.id}
-                              activeOpacity={0.7}
-                            >
-                              {generatingSMS === lead.id ? (
-                                <ActivityIndicator size="small" color={colors.primary} />
-                              ) : (
-                                <Ionicons name="chatbubble-outline" size={20} color={colors.primary} />
-                              )}
-                              <Text style={styles.menuItemText}>SMS</Text>
-                            </TouchableOpacity>
+                            {user?.userClientData?.country === 'Argentina' ? (
+                              <TouchableOpacity
+                                style={styles.menuItem}
+                                onPress={() => {
+                                  handleSendWhatsApp(lead.phone || lead.phoneManual || lead.phoneAuto || '');
+                                  closeMenu(lead.id);
+                                }}
+                                disabled={!lead.phone && !lead.phoneManual && !lead.phoneAuto}
+                                activeOpacity={0.7}
+                              >
+                                <Ionicons name="logo-whatsapp" size={20} color={colors.primary} />
+                                <Text style={styles.menuItemText}>Whats</Text>
+                              </TouchableOpacity>
+                            ) : (
+                              <TouchableOpacity
+                                style={styles.menuItem}
+                                onPress={() => handleText(lead.id)}
+                                disabled={generatingSMS === lead.id}
+                                activeOpacity={0.7}
+                              >
+                                {generatingSMS === lead.id ? (
+                                  <ActivityIndicator size="small" color={colors.primary} />
+                                ) : (
+                                  <Ionicons name="chatbubble-outline" size={20} color={colors.primary} />
+                                )}
+                                <Text style={styles.menuItemText}>SMS</Text>
+                              </TouchableOpacity>
+                            )}
                             <TouchableOpacity
                               style={styles.menuItem}
                               onPress={() => handleCall(lead.id)}
@@ -975,35 +1802,35 @@ export const FacebookLeadsList = forwardRef<FacebookLeadsListRef, FacebookLeadsL
                         >
                           <View style={styles.quickResponseContent}>
                             <TouchableOpacity
-                              style={styles.menuItem}
+                              style={[styles.menuItem, styles.statusButtonNoContest]}
                               onPress={() => handleClientStatusOption(lead.id, 'no-contest')}
                               activeOpacity={0.7}
                             >
-                              <Text style={styles.statusText}>🔴 No contestó</Text>
+                              <Text style={styles.statusText}>No contestó</Text>
                             </TouchableOpacity>
                             <TouchableOpacity
-                              style={styles.menuItem}
+                              style={[styles.menuItem, styles.statusButtonAppointment]}
                               onPress={() => handleClientStatusOption(lead.id, 'appointment')}
                               activeOpacity={0.7}
                             >
-                              <Text style={styles.statusText}>🟡 Cita Agendada</Text>
+                              <Text style={styles.statusText}>Cita Agendada</Text>
                             </TouchableOpacity>
                             <TouchableOpacity
-                              style={styles.menuItem}
+                              style={[styles.menuItem, styles.statusButtonRecontact]}
                               onPress={() => handleClientStatusOption(lead.id, 'recontact')}
                               activeOpacity={0.7}
                             >
                               <Text style={styles.statusText}>Por recontactar</Text>
                             </TouchableOpacity>
                             <TouchableOpacity
-                              style={styles.menuItem}
+                              style={[styles.menuItem, styles.statusButtonEstimatedSold]}
                               onPress={() => handleClientStatusOption(lead.id, 'estimated-sold')}
                               activeOpacity={0.7}
                             >
-                              <Text style={styles.statusText}>🟢 Estimado vendido</Text>
+                              <Text style={styles.statusText}>Estimado vendido</Text>
                             </TouchableOpacity>
                             <TouchableOpacity
-                              style={styles.menuItem}
+                              style={[styles.menuItem, styles.statusButtonWorkCompleted]}
                               onPress={() => handleClientStatusOption(lead.id, 'work-completed')}
                               activeOpacity={0.7}
                             >
@@ -1182,6 +2009,8 @@ export const FacebookLeadsList = forwardRef<FacebookLeadsListRef, FacebookLeadsL
         onRequestClose={() => {
           setDateTimeModalVisible(false);
           setDateTimeModalType(null);
+          setShowDatePicker(false);
+          setShowTimePicker(false);
         }}
       >
         <View style={styles.modalOverlay}>
@@ -1194,6 +2023,8 @@ export const FacebookLeadsList = forwardRef<FacebookLeadsListRef, FacebookLeadsL
                 onPress={() => {
                   setDateTimeModalVisible(false);
                   setDateTimeModalType(null);
+                  setShowDatePicker(false);
+                  setShowTimePicker(false);
                 }} 
                 style={styles.modalCloseButton}
               >
@@ -1204,28 +2035,69 @@ export const FacebookLeadsList = forwardRef<FacebookLeadsListRef, FacebookLeadsL
             <View style={styles.modalContent}>
               <View style={styles.dateTimeInputContainer}>
                 <Text style={styles.dateTimeLabel}>Fecha:</Text>
-                <TextInput
-                  style={styles.dateTimeInput}
-                  placeholder="YYYY-MM-DD"
-                  value={selectedDate.toISOString().split('T')[0]}
-                  onChangeText={(text) => {
-                    const date = new Date(text);
-                    if (!isNaN(date.getTime())) {
-                      setSelectedDate(date);
-                    }
-                  }}
-                />
+                <TouchableOpacity
+                  style={styles.dateTimeButton}
+                  onPress={() => setShowDatePicker(true)}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons name="calendar-outline" size={20} color={colors.primary} />
+                  <Text style={styles.dateTimeButtonText}>
+                    {selectedDate.toLocaleDateString('es-AR', {
+                      day: '2-digit',
+                      month: '2-digit',
+                      year: 'numeric',
+                    })}
+                  </Text>
+                </TouchableOpacity>
+                {showDatePicker && (
+                  <DateTimePicker
+                    value={selectedDate}
+                    mode="date"
+                    display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                    onChange={(event: any, date?: Date) => {
+                      setShowDatePicker(Platform.OS === 'ios');
+                      if (date) {
+                        setSelectedDate(date);
+                      }
+                    }}
+                    minimumDate={new Date()}
+                  />
+                )}
               </View>
               
               <View style={styles.dateTimeInputContainer}>
                 <Text style={styles.dateTimeLabel}>Hora:</Text>
-                <TextInput
-                  style={styles.dateTimeInput}
-                  placeholder="HH:MM"
-                  value={selectedTime}
-                  onChangeText={setSelectedTime}
-                  keyboardType="numeric"
-                />
+                <TouchableOpacity
+                  style={styles.dateTimeButton}
+                  onPress={() => setShowTimePicker(true)}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons name="time-outline" size={20} color={colors.primary} />
+                  <Text style={styles.dateTimeButtonText}>
+                    {selectedTime || 'Seleccionar hora'}
+                  </Text>
+                </TouchableOpacity>
+                {showTimePicker && (
+                  <DateTimePicker
+                    value={selectedTime ? (() => {
+                      const [hours, minutes] = selectedTime.split(':');
+                      const time = new Date();
+                      time.setHours(parseInt(hours || '0', 10));
+                      time.setMinutes(parseInt(minutes || '0', 10));
+                      return time;
+                    })() : new Date()}
+                    mode="time"
+                    display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                    onChange={(event: any, time?: Date) => {
+                      setShowTimePicker(Platform.OS === 'ios');
+                      if (time) {
+                        const hours = time.getHours().toString().padStart(2, '0');
+                        const minutes = time.getMinutes().toString().padStart(2, '0');
+                        setSelectedTime(`${hours}:${minutes}`);
+                      }
+                    }}
+                  />
+                )}
               </View>
             </View>
 
@@ -1235,6 +2107,8 @@ export const FacebookLeadsList = forwardRef<FacebookLeadsListRef, FacebookLeadsL
                 onPress={() => {
                   setDateTimeModalVisible(false);
                   setDateTimeModalType(null);
+                  setShowDatePicker(false);
+                  setShowTimePicker(false);
                 }}
                 activeOpacity={0.7}
               >
@@ -1420,6 +2294,10 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     elevation: 2,
   },
+  tutorialContainer: {
+    alignItems: 'center',
+    flexShrink: 0,
+  },
   menuToggleButton: {
     width: 40,
     height: 40,
@@ -1428,6 +2306,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     flexShrink: 0,
+  },
+  tutorialArrow: {
+    marginTop: 4,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   expandedMenu: {
     marginTop: 12,
@@ -1492,16 +2375,27 @@ const styles = StyleSheet.create({
   leadInfo: {
     flex: 1,
     gap: 12,
+    minWidth: 0,
+    width: '100%',
   },
   infoRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
   },
+  infoRowContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    flex: 1,
+  },
+  copyIconButton: {
+    padding: 0,
+    marginLeft: 0,
+  },
   infoText: {
     fontSize: 14,
     color: colors.textPrimary,
-    flex: 1,
   },
   dateText: {
     fontSize: 12,
@@ -1513,6 +2407,46 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
     flex: 1,
     fontWeight: '500',
+  },
+  statusIndicator: {
+    width: 16,
+    height: 16,
+    borderRadius: 2,
+    borderWidth: 2,
+  },
+  actionButtonsRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 12,
+    width: '100%',
+  },
+  actionButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    backgroundColor: colors.backgroundTertiary,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.border,
+    minWidth: 0,
+  },
+  callButton: {
+    // Usa el estilo base de actionButton
+  },
+  smsButton: {
+    // Usa el estilo base de actionButton
+  },
+  emailButton: {
+    // Usa el estilo base de actionButton
+  },
+  actionButtonText: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: colors.textPrimary,
   },
   emptyContainer: {
     padding: 60,
@@ -1646,11 +2580,43 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: colors.textPrimary,
   },
+  dateTimeButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: colors.backgroundTertiary,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    minHeight: 48,
+  },
+  dateTimeButtonText: {
+    fontSize: 15,
+    color: colors.textPrimary,
+    flex: 1,
+  },
   statusText: {
     fontSize: 14,
     fontWeight: '500',
     color: colors.textPrimary,
     flex: 1,
+  },
+  statusButtonNoContest: {
+    backgroundColor: '#fca5a5', // Rojo medio
+  },
+  statusButtonAppointment: {
+    backgroundColor: '#fcd34d', // Amarillo medio
+  },
+  statusButtonRecontact: {
+    backgroundColor: '#93c5fd', // Azul medio
+  },
+  statusButtonEstimatedSold: {
+    backgroundColor: '#6ee7b7', // Verde medio
+  },
+  statusButtonWorkCompleted: {
+    backgroundColor: '#a5b4fc', // Índigo/Morado medio
   },
   newButton: {
     flexDirection: 'row',
