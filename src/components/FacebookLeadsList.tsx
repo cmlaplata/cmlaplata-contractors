@@ -6,6 +6,7 @@ import { useAuth } from '../context/AuthContext';
 import { FacebookLead, facebookLeadsService, PaginationInfo } from '../services/facebookLeadsService';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../theme/colors';
+import { generateDeepLink, copyDeepLink } from '../utils/deepLinks';
 
 interface FacebookLeadsListProps {
   onEdit?: (lead: FacebookLead) => void;
@@ -284,6 +285,16 @@ export const FacebookLeadsList = forwardRef<FacebookLeadsListRef, FacebookLeadsL
           useNativeDriver: false,
         }).start();
       });
+    }
+  };
+
+  const handleCopyLeadLink = async (leadId: number) => {
+    try {
+      const link = await copyDeepLink(`leads/${leadId}`);
+      Alert.alert('Link copiado', `Deep link copiado: ${link}`);
+    } catch (error) {
+      const link = generateDeepLink(`leads/${leadId}`);
+      Alert.alert('Link generado', link);
     }
   };
 
