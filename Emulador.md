@@ -1,6 +1,6 @@
 adb devices
 emulator -avd cmlaplata
-pnpm start:8089
+pnpm start:8089:clear
 Puerto de apertura: 8089
 
 Debuggear

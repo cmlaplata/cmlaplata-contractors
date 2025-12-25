@@ -743,6 +743,78 @@ export const FacebookLeadsList = forwardRef<FacebookLeadsListRef, FacebookLeadsL
     setModalLeadId(null);
   };
 
+  const handleSendSMSFromModal = () => {
+    if (!modalLeadId) {
+      Alert.alert('Error', 'No se pudo identificar el lead');
+      return;
+    }
+
+    // Buscar el lead en la lista
+    const lead = displayLeads.find(l => l.id === modalLeadId);
+    if (!lead) {
+      Alert.alert('Error', 'No se encontró el lead');
+      return;
+    }
+
+    const phone = lead.phone || lead.phoneManual || lead.phoneAuto;
+    if (!phone) {
+      Alert.alert('Error', 'Este lead no tiene un número de teléfono');
+      return;
+    }
+
+    // Limpiar el número de teléfono
+    let cleanPhone = phone.replace(/[\s\-\(\)]/g, '');
+    
+    // Si el número ya tiene código de país (empieza con +), mantenerlo
+    // Si no tiene código de país, agregar +54 para Argentina
+    if (!cleanPhone.startsWith('+')) {
+      if (cleanPhone.startsWith('54')) {
+        cleanPhone = `+${cleanPhone}`;
+      } else {
+        cleanPhone = `+54${cleanPhone}`;
+      }
+    }
+
+    // Codificar el mensaje para la URL
+    const encodedMessage = encodeURIComponent(modalContent);
+    const smsUrl = `sms:${cleanPhone}?body=${encodedMessage}`;
+
+    Linking.openURL(smsUrl).catch((err) => {
+      Alert.alert('Error', 'No se pudo abrir la aplicación de mensajes');
+      console.error('Error al abrir SMS:', err);
+    });
+  };
+
+  const handleSendEmailFromModal = () => {
+    if (!modalLeadId) {
+      Alert.alert('Error', 'No se pudo identificar el lead');
+      return;
+    }
+
+    // Buscar el lead en la lista
+    const lead = displayLeads.find(l => l.id === modalLeadId);
+    if (!lead) {
+      Alert.alert('Error', 'No se encontró el lead');
+      return;
+    }
+
+    const email = lead.email;
+    if (!email) {
+      Alert.alert('Error', 'Este lead no tiene un email');
+      return;
+    }
+
+    // Codificar el asunto y el cuerpo del email para la URL
+    const encodedSubject = encodeURIComponent('Contacto');
+    const encodedBody = encodeURIComponent(modalContent);
+    const emailUrl = `mailto:${email}?subject=${encodedSubject}&body=${encodedBody}`;
+
+    Linking.openURL(emailUrl).catch((err) => {
+      Alert.alert('Error', 'No se pudo abrir la aplicación de email');
+      console.error('Error al abrir email:', err);
+    });
+  };
+
   // Funciones de cache para contenido generado
   const getCacheKey = (leadId: number, type: 'email' | 'sms' | 'call', language: 'español' | 'ingles'): string => {
     return `generated-content-${leadId}-${type}-${language}`;
@@ -1631,7 +1703,7 @@ export const FacebookLeadsList = forwardRef<FacebookLeadsListRef, FacebookLeadsL
                   ) : (
                     <TouchableOpacity
                       style={[styles.actionButton, styles.smsButton]}
-                      onPress={() => handleSendSMS(lead.id)}
+                      onPress={() => handleText(lead.id)}
                       disabled={generatingSMS === lead.id}
                       activeOpacity={0.7}
                     >
@@ -1645,7 +1717,7 @@ export const FacebookLeadsList = forwardRef<FacebookLeadsListRef, FacebookLeadsL
                   )}
                   <TouchableOpacity
                     style={[styles.actionButton, styles.emailButton]}
-                    onPress={() => handleSendEmail(lead.id)}
+                    onPress={() => handleGenerateEmail(lead.id, 'ingles')}
                     disabled={generatingEmail === lead.id}
                     activeOpacity={0.7}
                   >
@@ -1670,7 +1742,7 @@ export const FacebookLeadsList = forwardRef<FacebookLeadsListRef, FacebookLeadsL
                 >
                   <View style={styles.menuContent}>
                     <TouchableOpacity
-                      style={styles.quickResponseButton}
+                      style={[styles.quickResponseButton, { opacity: 0, height: 0, overflow: 'hidden', pointerEvents: 'none' as const }]}
                       onPress={() => {
                         toggleQuickResponse(lead.id);
                       }}
@@ -1700,8 +1772,8 @@ export const FacebookLeadsList = forwardRef<FacebookLeadsListRef, FacebookLeadsL
                       return (
                         <Animated.View 
                           style={{ 
-                            height: quickHeight, 
-                            opacity: quickOpacity,
+                            height: 0, 
+                            opacity: 0,
                             overflow: 'hidden',
                           }}
                         >
@@ -1961,6 +2033,17 @@ export const FacebookLeadsList = forwardRef<FacebookLeadsListRef, FacebookLeadsL
             </ScrollView>
 
             <View style={styles.modalActions}>
+              {(modalType === 'sms' || modalType === 'email') && (
+                <TouchableOpacity
+                  style={[styles.modalActionButton, styles.sendButton, styles.fullWidthButton]}
+                  onPress={modalType === 'sms' ? handleSendSMSFromModal : handleSendEmailFromModal}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons name="send-outline" size={20} color="#fff" />
+                  <Text style={styles.modalActionButtonText}>Enviar al cliente</Text>
+                </TouchableOpacity>
+              )}
+              
               <View style={styles.modalActionsRow}>
                 <TouchableOpacity
                   style={[styles.modalActionButton, styles.copyButton, styles.halfWidthButton]}
@@ -2551,6 +2634,9 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primary,
   },
   languageButton: {
+    backgroundColor: colors.primary,
+  },
+  sendButton: {
     backgroundColor: colors.primary,
   },
   closeButton: {

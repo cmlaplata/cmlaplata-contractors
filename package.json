@@ -5,9 +5,12 @@
   "scripts": {
     "start": "expo start",
     "start:8089": "expo start --port 8089",
+    "start:clear": "expo start --clear",
+    "start:8089:clear": "expo start --port 8089 --clear",
     "android": "expo run:android",
     "ios": "expo start --ios",
-    "web": "expo start --web"
+    "web": "expo start --web",
+    "reset-cache": "expo start --clear"
   },
   "dependencies": {
     "@expo/metro-runtime": "~6.1.2",
