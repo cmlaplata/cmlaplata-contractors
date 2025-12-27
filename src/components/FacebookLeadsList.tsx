@@ -1571,23 +1571,28 @@ export const FacebookLeadsList = forwardRef<FacebookLeadsListRef, FacebookLeadsL
       console.log('🟢 handleSaveDateTime: dateTimeModalType frontend:', dateTimeModalType);
       console.log('🟢 handleSaveDateTime: status backend:', backendStatus);
       
-      // Formatear fecha a YYYY-MM-DD (formato esperado por el backend)
-      const formattedDate = selectedDate.toISOString().split('T')[0];
-      const formattedTime = selectedTime; // Ya está en formato HH:MM
+      // Formatear fecha y hora a ISO string (formato esperado por el backend)
+      const [hours, minutes] = selectedTime.split(':').map(Number);
+      const dateTime = new Date(selectedDate);
+      dateTime.setHours(hours, minutes, 0, 0);
+      
+      // Convertir a ISO string (YYYY-MM-DDTHH:mm:ss.sssZ)
+      const isoString = dateTime.toISOString();
+      const formattedTime = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
       
       // Preparar opciones según el tipo de estado
       const options: any = {
         sendReminder: sendReminder
       };
       if (dateTimeModalType === 'appointment') {
-        options.appointmentDate = formattedDate;
+        options.appointmentDate = isoString;
         options.appointmentTime = formattedTime;
       } else if (dateTimeModalType === 'recontact') {
-        options.recontactDate = formattedDate;
+        options.recontactDate = isoString;
         options.recontactTime = formattedTime;
       }
       
-      console.log('🟢 handleSaveDateTime: Fecha formateada:', formattedDate);
+      console.log('🟢 handleSaveDateTime: Fecha ISO string:', isoString);
       console.log('🟢 handleSaveDateTime: Hora formateada:', formattedTime);
       console.log('🟢 handleSaveDateTime: Opciones:', options);
       
@@ -3735,6 +3740,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: 'transparent',
+    marginTop: 10,
   },
   checkboxChecked: {
     backgroundColor: colors.primary,
@@ -3749,7 +3755,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: colors.textSecondary,
     marginLeft: 36,
-    marginTop: -4,
+    marginTop: -6,
   },
   testButton: {
     backgroundColor: colors.warning + '20',
