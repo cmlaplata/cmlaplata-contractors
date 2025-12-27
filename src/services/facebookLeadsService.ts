@@ -256,10 +256,11 @@ export const facebookLeadsService = {
     leadId: number, 
     clientStatus: string,
     options?: {
-      appointmentDate?: string; // Formato: YYYY-MM-DD
+      appointmentDate?: string; // Formato: YYYY-MM-DD o ISO string
       appointmentTime?: string; // Formato: HH:MM
-      recontactDate?: string; // Formato: YYYY-MM-DD
+      recontactDate?: string; // Formato: YYYY-MM-DD o ISO string
       recontactTime?: string; // Formato: HH:MM
+      sendReminder?: boolean; // Si es true, crea un recordatorio automático
     }
   ): Promise<FacebookLead> => {
     const url = `${API_BASE_URL}/facebook-leads/${leadId}/client-status`;
@@ -289,6 +290,9 @@ export const facebookLeadsService = {
     }
     if (options?.recontactTime) {
       body.recontactTime = options.recontactTime;
+    }
+    if (options?.sendReminder !== undefined) {
+      body.sendReminder = options.sendReminder;
     }
     
     console.log('📡 updateClientStatus: Iniciando...');
@@ -328,6 +332,30 @@ export const facebookLeadsService = {
       });
       throw error;
     }
+  },
+
+  // Crear recordatorio de prueba
+  createTestReminder: async (
+    leadId: number,
+    data: {
+      appointmentDate: string; // YYYY-MM-DD
+      appointmentTime: string; // HH:MM
+      reminderType: 'Cita Agendada' | 'Por recontactar';
+    }
+  ): Promise<{ id: number; [key: string]: any }> => {
+    const response = await api.post<ApiResponse<{ id: number; [key: string]: any }>>(
+      `${API_BASE_URL}/facebook-leads/${leadId}/appointment-reminders/test`,
+      data
+    );
+    return response.data.data;
+  },
+
+  // Enviar recordatorio específico
+  sendReminder: async (reminderId: number): Promise<{ success: boolean; message: string }> => {
+    const response = await api.post<ApiResponse<{ success: boolean; message: string }>>(
+      `${API_BASE_URL}/facebook-leads/appointment-reminders/${reminderId}/send`
+    );
+    return response.data.data;
   },
 };
 

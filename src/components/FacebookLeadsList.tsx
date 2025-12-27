@@ -146,6 +146,7 @@ export const FacebookLeadsList = forwardRef<FacebookLeadsListRef, FacebookLeadsL
   const [dateTimeModalType, setDateTimeModalType] = useState<'appointment' | 'recontact' | null>(null);
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
   const [selectedTime, setSelectedTime] = useState<string>('');
+  const [sendReminder, setSendReminder] = useState<boolean>(true);
   const [expandedClientStatusInfo, setExpandedClientStatusInfo] = useState<number | null>(null);
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [showTimePicker, setShowTimePicker] = useState(false);
@@ -1413,6 +1414,7 @@ export const FacebookLeadsList = forwardRef<FacebookLeadsListRef, FacebookLeadsL
       setModalLeadId(leadId);
       setSelectedDate(new Date());
       setSelectedTime('');
+      setSendReminder(true); // Resetear a true por defecto
       setDateTimeModalVisible(true);
     } else {
       try {
@@ -1484,6 +1486,65 @@ export const FacebookLeadsList = forwardRef<FacebookLeadsListRef, FacebookLeadsL
     }
   };
 
+  // Función para enviar recordatorio de prueba
+  const handleTestReminder = async (leadId: number) => {
+    try {
+      const lead = displayLeads.find(l => l.id === leadId);
+      if (!lead) {
+        Alert.alert('Error', 'No se encontró el lead');
+        return;
+      }
+
+      // Determinar el tipo de recordatorio y fecha/hora
+      let reminderType: 'Cita Agendada' | 'Por recontactar';
+      let appointmentDate: string;
+      let appointmentTime: string;
+
+      if (lead.clientStatus === 'Cita Agendada' || lead.clientStatus === 'Cita agendada') {
+        reminderType = 'Cita Agendada';
+        if (!lead.appointmentDate || !lead.appointmentTime) {
+          Alert.alert('Error', 'Este lead no tiene fecha y hora de cita agendada');
+          return;
+        }
+        // Convertir appointmentDate (ISO string) a YYYY-MM-DD
+        const date = new Date(lead.appointmentDate);
+        appointmentDate = date.toISOString().split('T')[0];
+        appointmentTime = lead.appointmentTime;
+      } else if (lead.clientStatus === 'Por recontactar') {
+        reminderType = 'Por recontactar';
+        if (!lead.recontactDate || !lead.recontactTime) {
+          Alert.alert('Error', 'Este lead no tiene fecha y hora de recontacto');
+          return;
+        }
+        // Convertir recontactDate (ISO string) a YYYY-MM-DD
+        const date = new Date(lead.recontactDate);
+        appointmentDate = date.toISOString().split('T')[0];
+        appointmentTime = lead.recontactTime;
+      } else {
+        Alert.alert('Error', 'Este lead no tiene un estado válido para recordatorio');
+        return;
+      }
+
+      // Crear recordatorio de prueba
+      const response = await facebookLeadsService.createTestReminder(leadId, {
+        appointmentDate,
+        appointmentTime,
+        reminderType
+      });
+
+      // Enviar el recordatorio inmediatamente
+      await facebookLeadsService.sendReminder(response.id);
+
+      Alert.alert('✅ Éxito', 'Recordatorio de prueba enviado');
+    } catch (error: any) {
+      console.error('Error al enviar recordatorio de prueba:', error);
+      Alert.alert(
+        'Error',
+        error?.response?.data?.message || error?.message || 'No se pudo enviar el recordatorio de prueba'
+      );
+    }
+  };
+
   const handleSaveDateTime = async () => {
     console.log('🟢 handleSaveDateTime: Iniciando...');
     console.log('🟢 handleSaveDateTime: selectedTime:', selectedTime);
@@ -1510,27 +1571,23 @@ export const FacebookLeadsList = forwardRef<FacebookLeadsListRef, FacebookLeadsL
       console.log('🟢 handleSaveDateTime: dateTimeModalType frontend:', dateTimeModalType);
       console.log('🟢 handleSaveDateTime: status backend:', backendStatus);
       
-      // Formatear fecha y hora a ISO string
-      // Combinar fecha y hora en un objeto Date y luego convertir a ISO string
-      const [hours, minutes] = selectedTime.split(':').map(Number);
-      const dateTime = new Date(selectedDate);
-      dateTime.setHours(hours, minutes, 0, 0);
-      
-      // Convertir a ISO string (YYYY-MM-DDTHH:mm:ss.sssZ)
-      const isoString = dateTime.toISOString();
-      const formattedTime = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+      // Formatear fecha a YYYY-MM-DD (formato esperado por el backend)
+      const formattedDate = selectedDate.toISOString().split('T')[0];
+      const formattedTime = selectedTime; // Ya está en formato HH:MM
       
       // Preparar opciones según el tipo de estado
-      const options: any = {};
+      const options: any = {
+        sendReminder: sendReminder
+      };
       if (dateTimeModalType === 'appointment') {
-        options.appointmentDate = isoString;
+        options.appointmentDate = formattedDate;
         options.appointmentTime = formattedTime;
       } else if (dateTimeModalType === 'recontact') {
-        options.recontactDate = isoString;
+        options.recontactDate = formattedDate;
         options.recontactTime = formattedTime;
       }
       
-      console.log('🟢 handleSaveDateTime: Fecha ISO string:', isoString);
+      console.log('🟢 handleSaveDateTime: Fecha formateada:', formattedDate);
       console.log('🟢 handleSaveDateTime: Hora formateada:', formattedTime);
       console.log('🟢 handleSaveDateTime: Opciones:', options);
       
@@ -2277,6 +2334,15 @@ export const FacebookLeadsList = forwardRef<FacebookLeadsListRef, FacebookLeadsL
                     </TouchableOpacity>
                   </View>
                 </View>
+                {/* Botón de testeo temporal para recordatorio - TEMPORAL PARA TESTING */}
+                <TouchableOpacity
+                  style={[styles.actionButton, styles.testButton]}
+                  onPress={() => handleTestReminder(lead.id)}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons name="flash-outline" size={20} color={colors.warning} />
+                  <Text style={[styles.actionButtonText, { color: colors.warning }]}>Test Recordatorio</Text>
+                </TouchableOpacity>
                 <View style={styles.actionButtonsRow}>
                   <TouchableOpacity
                     style={[styles.actionButton, styles.callButton]}
@@ -2822,6 +2888,7 @@ export const FacebookLeadsList = forwardRef<FacebookLeadsListRef, FacebookLeadsL
                   setDateTimeModalType(null);
                   setShowDatePicker(false);
                   setShowTimePicker(false);
+                  setSendReminder(true); // Resetear a true
                 }} 
                 style={styles.modalCloseButton}
               >
@@ -2896,6 +2963,25 @@ export const FacebookLeadsList = forwardRef<FacebookLeadsListRef, FacebookLeadsL
                   />
                 )}
               </View>
+              
+              {/* Checkbox para recordatorio por WhatsApp */}
+              <View style={styles.reminderCheckboxContainer}>
+                <TouchableOpacity
+                  style={styles.reminderCheckbox}
+                  onPress={() => setSendReminder(!sendReminder)}
+                  activeOpacity={0.7}
+                >
+                  <View style={[styles.checkbox, sendReminder && styles.checkboxChecked]}>
+                    {sendReminder && (
+                      <Ionicons name="checkmark" size={16} color="#fff" />
+                    )}
+                  </View>
+                  <Text style={styles.reminderCheckboxText}>Recordarme por whatsapp</Text>
+                </TouchableOpacity>
+                <Text style={styles.reminderInfoText}>
+                  Te notificaremos por Whatsapp 1 hora antes
+                </Text>
+              </View>
             </View>
 
             <View style={styles.modalActions}>
@@ -2908,6 +2994,7 @@ export const FacebookLeadsList = forwardRef<FacebookLeadsListRef, FacebookLeadsL
                     setDateTimeModalType(null);
                     setShowDatePicker(false);
                     setShowTimePicker(false);
+                    setSendReminder(true); // Resetear a true
                   }}
                   activeOpacity={0.7}
                 >
@@ -3628,6 +3715,48 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: colors.textPrimary,
     flex: 1,
+  },
+  reminderCheckboxContainer: {
+    marginTop: 20,
+    marginBottom: 8,
+  },
+  reminderCheckbox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 4,
+  },
+  checkbox: {
+    width: 24,
+    height: 24,
+    borderRadius: 6,
+    borderWidth: 2,
+    borderColor: colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'transparent',
+  },
+  checkboxChecked: {
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
+  },
+  reminderCheckboxText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: colors.textPrimary,
+  },
+  reminderInfoText: {
+    fontSize: 12,
+    color: colors.textSecondary,
+    marginLeft: 36,
+    marginTop: -4,
+  },
+  testButton: {
+    backgroundColor: colors.warning + '20',
+    borderWidth: 1,
+    borderColor: colors.warning,
+    marginBottom: 8,
+    width: '100%',
   },
   statusText: {
     fontSize: 14,
