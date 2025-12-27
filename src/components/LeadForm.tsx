@@ -21,7 +21,19 @@ export const LeadForm: React.FC<LeadFormProps> = ({ lead, onSuccess, onCancel })
     project: lead?.project || '',
     city: lead?.city || '',
     email: lead?.email || '',
+    data1: lead?.data1 || '',
+    data2: lead?.data2 || '',
+    data3: lead?.data3 || '',
+    data4: lead?.data4 || '',
+    data5: lead?.data5 || '',
   });
+
+  // Determinar qué campos mostrar cuando se está editando
+  // Mostrar todos los campos que tienen valores (no son null)
+  const shouldShowField = (field: keyof FacebookLead): boolean => {
+    if (!lead) return true; // Si es nuevo lead, mostrar todos los campos
+    return lead[field] !== null && lead[field] !== undefined && lead[field] !== '';
+  };
 
   useEffect(() => {
     if (lead) {
@@ -33,6 +45,11 @@ export const LeadForm: React.FC<LeadFormProps> = ({ lead, onSuccess, onCancel })
         project: lead.project || '',
         city: lead.city || '',
         email: lead.email || '',
+        data1: lead.data1 || '',
+        data2: lead.data2 || '',
+        data3: lead.data3 || '',
+        data4: lead.data4 || '',
+        data5: lead.data5 || '',
       });
     }
   }, [lead]);

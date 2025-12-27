@@ -18,6 +18,10 @@ export interface FacebookLead {
   availableBudget: string | null;               // Presupuesto disponible (opcional)
   extraInfo: string | null;                     // Información extra (opcional)
   clientStatus: string | null;                  // Estado del cliente
+  appointmentDate?: string | null;              // Fecha de cita agendada (ISO string)
+  appointmentTime?: string | null;              // Hora de cita agendada (HH:MM)
+  recontactDate?: string | null;                // Fecha de recontacto (ISO string)
+  recontactTime?: string | null;                // Hora de recontacto (HH:MM)
   data1: string | null;
   data2: string | null;
   data3: string | null;
@@ -248,14 +252,53 @@ export const facebookLeadsService = {
   },
 
   // Actualizar estado del cliente
-  updateClientStatus: async (leadId: number, clientStatus: string): Promise<FacebookLead> => {
+  updateClientStatus: async (
+    leadId: number, 
+    clientStatus: string,
+    options?: {
+      appointmentDate?: string; // Formato: YYYY-MM-DD
+      appointmentTime?: string; // Formato: HH:MM
+      recontactDate?: string; // Formato: YYYY-MM-DD
+      recontactTime?: string; // Formato: HH:MM
+    }
+  ): Promise<FacebookLead> => {
     const url = `${API_BASE_URL}/facebook-leads/${leadId}/client-status`;
-    const body = { clientStatus };
+    
+    // Validar que clientStatus no sea undefined o null
+    if (!clientStatus || clientStatus === 'undefined' || clientStatus === 'null') {
+      throw new Error('clientStatus no puede ser undefined o null');
+    }
+    
+    // Asegurar que clientStatus sea un string válido
+    const cleanStatus = String(clientStatus).trim();
+    if (!cleanStatus) {
+      throw new Error('clientStatus no puede estar vacío');
+    }
+    
+    const body: any = { clientStatus: cleanStatus };
+    
+    // Agregar campos de fecha y hora si están presentes
+    if (options?.appointmentDate) {
+      body.appointmentDate = options.appointmentDate;
+    }
+    if (options?.appointmentTime) {
+      body.appointmentTime = options.appointmentTime;
+    }
+    if (options?.recontactDate) {
+      body.recontactDate = options.recontactDate;
+    }
+    if (options?.recontactTime) {
+      body.recontactTime = options.recontactTime;
+    }
     
     console.log('📡 updateClientStatus: Iniciando...');
     console.log('📡 updateClientStatus: URL:', url);
     console.log('📡 updateClientStatus: leadId:', leadId);
     console.log('📡 updateClientStatus: clientStatus:', clientStatus);
+    console.log('📡 updateClientStatus: clientStatus type:', typeof clientStatus);
+    console.log('📡 updateClientStatus: clientStatus length:', clientStatus?.length);
+    console.log('📡 updateClientStatus: clientStatus charCodes:', clientStatus?.split('').map(c => c.charCodeAt(0)));
+    console.log('📡 updateClientStatus: options:', options);
     console.log('📡 updateClientStatus: Body:', JSON.stringify(body, null, 2));
     
     try {
@@ -275,11 +318,13 @@ export const facebookLeadsService = {
         error,
         message: error?.message,
         response: error?.response?.data,
+        responseData: JSON.stringify(error?.response?.data, null, 2),
         status: error?.response?.status,
         statusText: error?.response?.statusText,
         url: error?.config?.url,
         method: error?.config?.method,
-        data: error?.config?.data,
+        requestData: error?.config?.data,
+        requestDataParsed: error?.config?.data ? JSON.parse(error?.config?.data) : null,
       });
       throw error;
     }

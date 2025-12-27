@@ -1,6 +1,28 @@
 import axios from 'axios';
 import { auth } from './firebase';
 import { API_BASE_URL, API_KEY } from './api';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Platform } from 'react-native';
+
+// Detectar si estamos en Expo Go
+const isExpoGo = () => {
+  try {
+    // @ts-ignore
+    return typeof __DEV__ !== 'undefined' && __DEV__ && !Platform.select({ web: false, android: true, ios: true });
+  } catch {
+    return false;
+  }
+};
+
+// Detectar si estamos en desarrollo o Expo Go
+const isDevelopmentOrExpoGo = () => {
+  try {
+    // @ts-ignore
+    return typeof __DEV__ !== 'undefined' && __DEV__;
+  } catch {
+    return false;
+  }
+};
 
 const axiosInstance = axios.create({
   baseURL: API_BASE_URL,
@@ -8,37 +30,123 @@ const axiosInstance = axios.create({
   headers: {
     'Content-Type': 'application/json',
     'x-api-key': API_KEY,
+    // Solo agregar User-Agent de Chrome en desarrollo/Expo Go
+    // Esto evita que el backend bloquee la petición por User-Agent desconocido
+    // En producción (APK compilada) no se agrega para evitar problemas
+    ...(isDevelopmentOrExpoGo() && {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    }),
   },
 });
 
 // Interceptor para agregar token automáticamente
 axiosInstance.interceptors.request.use(
   async (config) => {
+    // Log de la petición que se está haciendo (especialmente útil para Expo Go)
+    const inExpoGo = isExpoGo();
+    if (inExpoGo || config.url?.includes('byFireBaseId')) {
+      console.log('📤 [axios] Petición iniciada:', {
+        url: config.url,
+        method: config.method,
+        baseURL: config.baseURL || axiosInstance.defaults.baseURL,
+        fullUrl: `${config.baseURL || axiosInstance.defaults.baseURL}${config.url}`,
+        platform: Platform.OS,
+        expoGo: inExpoGo,
+      });
+    }
+    
     // Agregar API Key en cada petición
     if (API_KEY) {
       config.headers['x-api-key'] = API_KEY;
     }
 
-    // NO agregar token de Firebase para estos endpoints (solo API key)
+    // NO agregar token de autenticación para estos endpoints (solo API key)
     const isSearchEndpoint = config.url?.includes('my-leads/search');
     const isGenerateEmailEndpoint = config.url?.includes('generate-email');
+    const isAuthEndpoint = config.url?.includes('/auth/');
     
-    if (!isSearchEndpoint && !isGenerateEmailEndpoint) {
-      // Agregar token de Firebase si el usuario está autenticado (para otros endpoints)
-      const user = auth.currentUser;
-      if (user) {
-        try {
-          // Forzar renovación del token para asegurar que esté vigente
-          const idToken = await user.getIdToken(true);
-          if (idToken) {
-            config.headers.Authorization = `Bearer ${idToken}`;
+    // Para endpoints de auth, asegurar que NO se agregue Authorization header
+    if (isAuthEndpoint) {
+      delete config.headers.Authorization;
+      console.log('🔐 Endpoint de auth detectado, solo usando x-api-key');
+    }
+    
+    if (!isSearchEndpoint && !isGenerateEmailEndpoint && !isAuthEndpoint) {
+      // Verificar método de autenticación
+      const authMethod = await AsyncStorage.getItem('auth_method');
+      
+      if (authMethod === 'phone') {
+        // Si se autenticó con teléfono, usar token del backend
+        const apiToken = await AsyncStorage.getItem('api_auth_token');
+        if (apiToken) {
+          config.headers.Authorization = `Bearer ${apiToken}`;
+        }
+      } else {
+        // Si se autenticó con Firebase (email/password), usar token de Firebase
+        const user = auth.currentUser;
+        if (user) {
+          try {
+            // Usar token cacheado (false) en lugar de forzar renovación (true)
+            // Esto evita problemas de sincronización de reloj entre Google, el celular y el servidor
+            // Solo se renueva automáticamente si el token expiró
+            const idToken = await user.getIdToken(false);
+            if (idToken) {
+              // Asegurar que el header se establezca correctamente
+              const authHeader = `Bearer ${idToken.trim()}`;
+              config.headers.Authorization = authHeader;
+              
+              // Logs específicos para Expo Go
+              const inExpoGo = isExpoGo();
+              console.log('✅ [axios] Token de Firebase agregado a petición:', config.url);
+              console.log('📱 [axios] Platform:', Platform.OS);
+              console.log('📱 [axios] Expo Go:', inExpoGo);
+              console.log('📱 [axios] Token length:', idToken.length);
+              console.log('📱 [axios] Token preview:', idToken.substring(0, 20) + '...');
+              console.log('📱 [axios] Authorization header:', config.headers.Authorization ? `Presente (${config.headers.Authorization.substring(0, 30)}...)` : 'Faltante');
+              console.log('📱 [axios] x-api-key header:', config.headers['x-api-key'] ? 'Presente' : 'Faltante');
+              
+              // En Expo Go, forzar que los headers se establezcan correctamente
+              if (inExpoGo) {
+                // Los headers ya están definidos, solo aseguramos que estén correctos
+                config.headers.Authorization = authHeader;
+                if (API_KEY) {
+                  config.headers['x-api-key'] = API_KEY;
+                }
+                console.log('🔧 [axios] Headers forzados para Expo Go');
+              }
+              
+              // Log detallado de headers finales (para todos los casos, no solo Expo Go)
+              console.log('🔧 [axios] Headers finales antes de enviar:', {
+                'Authorization': config.headers.Authorization ? `Presente (${config.headers.Authorization.substring(0, 40)}...)` : 'Faltante',
+                'x-api-key': config.headers['x-api-key'] ? `Presente (${config.headers['x-api-key'].substring(0, 15)}...)` : 'Faltante',
+                'Content-Type': config.headers['Content-Type'] || 'No definido',
+              });
+              console.log('🔧 [axios] Todos los headers keys:', Object.keys(config.headers || {}).join(', '));
+            } else {
+              console.warn('⚠️ [axios] No se pudo obtener token de Firebase para:', config.url);
+            }
+          } catch (error: any) {
+            console.error('❌ [axios] Error obteniendo token de Firebase:', {
+              error: error.message,
+              code: error.code,
+              url: config.url,
+              user: user ? `Sí (${user.uid})` : 'No',
+            });
+            // En Expo, a veces el token no está disponible inmediatamente
+            // Intentar obtenerlo sin forzar renovación
+            try {
+              const idToken = await user.getIdToken(false);
+              if (idToken) {
+                config.headers.Authorization = `Bearer ${idToken}`;
+                console.log('✅ [axios] Token obtenido sin forzar renovación');
+              }
+            } catch (retryError: any) {
+              console.error('❌ [axios] Error en segundo intento de obtener token:', retryError.message);
+            }
           }
-        } catch (error: any) {
-          console.error('❌ Error obteniendo token:', {
-            error: error.message,
-            code: error.code,
-            url: config.url,
-          });
+        } else {
+          console.warn('⚠️ [axios] No hay usuario de Firebase para:', config.url);
+          console.warn('⚠️ [axios] auth.currentUser es null');
         }
       }
     }
@@ -50,14 +158,56 @@ axiosInstance.interceptors.request.use(
   }
 );
 
-// Interceptor para manejar errores de autenticación
+// Interceptor para manejar errores de autenticación y conexión
 axiosInstance.interceptors.response.use(
   (response) => response,
   async (error) => {
-    if (error.response?.status === 401) {
+    // Log detallado del error para debugging
+    if (error.code === 'NETWORK_ERROR' || error.message?.includes('Network Error') || !error.response) {
+      console.error('❌ Error de conexión a la API:', {
+        message: error.message,
+        code: error.code,
+        baseURL: axiosInstance.defaults.baseURL,
+        url: error.config?.url,
+        fullUrl: error.config ? `${axiosInstance.defaults.baseURL}${error.config.url}` : 'N/A',
+      });
+    } else if (error.response?.status === 401) {
       // Token expirado o inválido
-      // Opcional: intentar refrescar el token o redirigir a login
-      console.error('Error de autenticación: Token inválido o expirado');
+      console.error('❌ [axios] Error 401: Token inválido o expirado');
+      console.error('❌ [axios] URL:', error.config?.url);
+      console.error('❌ [axios] Headers enviados:', error.config?.headers);
+      // NO hacer logout automáticamente - Firebase puede renovar el token
+      // Solo loguear el error pero no limpiar la sesión
+    } else if (error.response?.status === 403) {
+      // Forbidden - token no autorizado o falta de permisos
+      const inExpoGo = isExpoGo();
+      console.error('❌ [axios] Error 403: Forbidden');
+      console.error('❌ [axios] Platform:', Platform.OS);
+      console.error('❌ [axios] Expo Go:', inExpoGo);
+      console.error('❌ [axios] URL:', error.config?.url);
+      console.error('❌ [axios] BaseURL:', axiosInstance.defaults.baseURL);
+      console.error('❌ [axios] Full URL:', `${axiosInstance.defaults.baseURL}${error.config?.url}`);
+      console.error('❌ [axios] Headers enviados:', {
+        'x-api-key': error.config?.headers?.['x-api-key'] ? `Presente (${error.config.headers['x-api-key'].substring(0, 10)}...)` : 'Faltante',
+        'Authorization': error.config?.headers?.Authorization ? `Presente (${error.config.headers.Authorization.substring(0, 30)}...)` : 'Faltante',
+        'Content-Type': error.config?.headers?.['Content-Type'] || 'No definido',
+      });
+      console.error('❌ [axios] Todos los headers keys enviados:', Object.keys(error.config?.headers || {}).join(', '));
+      console.error('❌ [axios] Request config:', {
+        method: error.config?.method,
+        url: error.config?.url,
+        baseURL: error.config?.baseURL,
+      });
+      console.error('❌ [axios] auth.currentUser:', auth.currentUser ? `Sí (${auth.currentUser.uid})` : 'No');
+      console.error('❌ [axios] Response data:', error.response?.data);
+      console.error('❌ [axios] Response headers:', error.response?.headers);
+    } else {
+      console.error('❌ [axios] Error en petición:', {
+        status: error.response?.status,
+        statusText: error.response?.statusText,
+        url: error.config?.url,
+        baseURL: axiosInstance.defaults.baseURL,
+      });
     }
     return Promise.reject(error);
   }

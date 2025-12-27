@@ -1,4 +1,4 @@
-# CM La Plata Contractors - App de Gestión de Leads
+# CM La Platas - App de Gestión de Leads
 
 Aplicación React Native con Expo para gestionar leads de Facebook. Funciona en Web, iOS y Android.
 
@@ -285,5 +285,5 @@ Este proyecto es privado y de uso interno.
 
 ---
 
-Desarrollado con ❤️ para CM La Plata Contractors
+Desarrollado con ❤️ para CM La Platas
 

@@ -1,7 +1,7 @@
 import * as Linking from 'expo-linking';
 import { Platform } from 'react-native';
 
-const SCHEME = 'cmlaplatacontractors';
+const SCHEME = 'cmlaplata';
 
 /**
  * Genera un deep link para la app
@@ -51,8 +51,8 @@ export const copyDeepLink = async (path: string = '', params?: Record<string, st
     }
   } else {
     try {
-      const Clipboard = require('@react-native-clipboard/clipboard').default;
-      Clipboard.setString(link);
+      const Clipboard = require('expo-clipboard');
+      await Clipboard.setStringAsync(link);
     } catch {
       // Si no está disponible, solo retornamos el link
     }

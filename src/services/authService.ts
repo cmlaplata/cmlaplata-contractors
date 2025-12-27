@@ -1,5 +1,6 @@
 import { 
   signInWithEmailAndPassword, 
+  signInWithCustomToken,
   signOut, 
   User as FirebaseUser,
   setPersistence,
@@ -8,8 +9,10 @@ import {
 } from 'firebase/auth';
 import { auth } from '../config/firebase';
 import axiosInstance from '../config/axios';
-import { API_BASE_URL } from '../config/api';
+import axios from 'axios';
+import { API_BASE_URL, API_KEY } from '../config/api';
 import { Platform } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export interface User {
   id: number;
@@ -88,11 +91,17 @@ export const authService = {
 
       // 3. Obtener datos del usuario desde el backend
       console.log('3️⃣ Consultando backend para obtener datos del usuario...');
-      console.log('   URL:', `${API_BASE_URL}/users/byFireBaseId/${firebaseUser.uid}`);
+      const userEndpoint = `/users/byFireBaseId/${firebaseUser.uid}`;
+      const fullUrl = `${API_BASE_URL}${userEndpoint}`;
+      console.log('   URL completa:', fullUrl);
+      console.log('   Platform:', Platform.OS);
       
-      const response = await axiosInstance.get<User>(
-        `${API_BASE_URL}/users/byFireBaseId/${firebaseUser.uid}`
-      );
+      // Obtener token nuevamente para asegurar que esté vigente
+      const freshToken = await firebaseUser.getIdToken(true);
+      console.log('   Token fresco obtenido (length):', freshToken.length);
+      console.log('   Token preview:', freshToken.substring(0, 30) + '...');
+      
+      const response = await axiosInstance.get<User>(userEndpoint);
 
       console.log('✅ Respuesta del backend:', {
         status: response.status,
@@ -243,10 +252,40 @@ export const authService = {
   // Logout
   logout: async (): Promise<void> => {
     try {
-      await signOut(auth);
+      // Cerrar sesión de Firebase si existe
+      if (auth.currentUser) {
+        await signOut(auth);
+      }
+      // Limpiar token del backend y datos del usuario
+      await Promise.all([
+        AsyncStorage.removeItem('api_auth_token'),
+        AsyncStorage.removeItem('auth_method'),
+        AsyncStorage.removeItem('user_data'), // <--- Borrar datos del usuario también
+      ]);
     } catch (error) {
       console.error('Error en logout:', error);
       throw error;
+    }
+  },
+
+  // Obtener token del backend almacenado
+  getApiToken: async (): Promise<string | null> => {
+    try {
+      return await AsyncStorage.getItem('api_auth_token');
+    } catch (error) {
+      console.error('Error obteniendo token del backend:', error);
+      return null;
+    }
+  },
+
+  // Verificar método de autenticación
+  getAuthMethod: async (): Promise<'firebase' | 'phone' | null> => {
+    try {
+      const method = await AsyncStorage.getItem('auth_method');
+      return method as 'firebase' | 'phone' | null;
+    } catch (error) {
+      console.error('Error obteniendo método de autenticación:', error);
+      return null;
     }
   },
 
@@ -286,6 +325,199 @@ export const authService = {
     } catch (error) {
       console.error('Error obteniendo datos del usuario:', error);
       return null;
+    }
+  },
+
+  // Solicitar código de verificación por WhatsApp
+  requestVerificationCode: async (phone: string): Promise<{ success: boolean; message?: string; error?: string }> => {
+    try {
+      console.log('📱 Solicitando código de verificación para:', phone);
+      console.log('🔑 API Key:', API_KEY ? `${API_KEY.substring(0, 10)}...` : 'No configurada');
+      console.log('🌐 URL:', `${API_BASE_URL}/auth/request-code`);
+      
+      // Crear una petición limpia sin el interceptor que agrega tokens
+      const response = await axios.post(
+        `${API_BASE_URL}/auth/request-code`,
+        { phone },
+        {
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': API_KEY,
+          },
+          timeout: 10000,
+        }
+      );
+      
+      console.log('✅ Código de verificación solicitado exitosamente');
+      return {
+        success: true,
+        message: response.data.message || 'Código de verificación enviado exitosamente'
+      };
+    } catch (error: any) {
+      console.error('❌ Error solicitando código:', error);
+      console.error('📋 Detalles del error:', {
+        status: error.response?.status,
+        statusText: error.response?.statusText,
+        data: error.response?.data,
+        headers: error.config?.headers,
+      });
+      
+      let errorMessage = 'Error al solicitar código de verificación';
+      
+      if (error.response) {
+        const status = error.response.status;
+        const message = error.response.data?.message;
+        
+        if (status === 404) {
+          errorMessage = 'Cliente no encontrado con ese número de teléfono';
+        } else if (status === 400) {
+          errorMessage = Array.isArray(message) ? message.join(', ') : message || 'Teléfono inválido';
+        } else if (status === 500) {
+          errorMessage = message || 'Error al enviar código por WhatsApp';
+        } else {
+          errorMessage = message || `Error del servidor (${status})`;
+        }
+      } else if (error.request) {
+        errorMessage = 'No se pudo conectar al servidor. Verifica tu conexión a internet.';
+      }
+      
+      return {
+        success: false,
+        error: errorMessage
+      };
+    }
+  },
+
+  // Verificar código y autenticar (sin Firebase, solo con token del backend)
+  verifyCodeAndLogin: async (phone: string, code: string): Promise<LoginResult> => {
+    console.log('🔐 Iniciando verificación de código...');
+    console.log('📱 Teléfono:', phone);
+    console.log('🔑 Código:', code);
+
+    try {
+      // 1. Verificar código y obtener token del backend (solo con x-api-key)
+      console.log('1️⃣ Verificando código con el backend...');
+      console.log('🔑 API Key:', API_KEY ? `${API_KEY.substring(0, 10)}...` : 'No configurada');
+      console.log('🌐 URL:', `${API_BASE_URL}/auth/verify-code`);
+      
+      // Usar axios directamente (sin interceptor) para endpoints de auth
+      // ya que solo necesitan x-api-key, no token de autenticación
+      const response = await axios.post(
+        `${API_BASE_URL}/auth/verify-code`,
+        { phone, code },
+        {
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': API_KEY,
+          },
+          timeout: 10000,
+        }
+      );
+
+      if (!response.data.success || !response.data.token) {
+        throw new Error('Token no recibido del servidor');
+      }
+
+      const apiToken = response.data.token;
+      const userData = response.data.user;
+      console.log('✅ Código verificado, token recibido');
+
+      // 2. Almacenar el token del backend en AsyncStorage
+      console.log('2️⃣ Almacenando token del backend...');
+      await AsyncStorage.setItem('api_auth_token', apiToken);
+      await AsyncStorage.setItem('auth_method', 'phone'); // Marcar que se autenticó con teléfono
+      console.log('✅ Token almacenado');
+
+      // 3. Construir objeto de usuario con los datos recibidos
+      console.log('3️⃣ Construyendo datos del usuario...');
+      const user: User = {
+        id: userData.id,
+        name: formatName(userData.name),
+        email: userData.email || '',
+        firebase_id: userData.firebase_id || '', // Puede estar vacío si no usa Firebase
+        userType: userData.userType || 'Seller',
+        clientId: userData.clientId,
+      };
+
+      // 4. Obtener datos del cliente si tiene clientId
+      if (userData.clientId) {
+        try {
+          console.log('4️⃣ Obteniendo datos del cliente...');
+          // Crear una instancia temporal de axios con el token para esta petición
+          const clientResponse = await axiosInstance.get(
+            `${API_BASE_URL}/clients/get/client/${userData.clientId}`
+          );
+          const clientData = Array.isArray(clientResponse.data) 
+            ? clientResponse.data[0] 
+            : clientResponse.data;
+          user.userClientData = clientData;
+          console.log('✅ Datos del cliente obtenidos');
+        } catch (clientError) {
+          console.warn('⚠️ Error obteniendo datos del cliente:', clientError);
+          user.userClientData = null;
+        }
+      }
+
+      console.log('✅ Login con teléfono completado exitosamente');
+      return {
+        success: true,
+        user: user,
+        firebaseUser: null, // No hay Firebase user cuando se autentica con teléfono
+      };
+    } catch (error: any) {
+      console.warn('⚠️ Error en verificación de código:', {
+        code: error.code,
+        message: error.message,
+        response: error.response?.data,
+        status: error.response?.status,
+      });
+
+      let errorMessage = 'Error al verificar código';
+      let errorCode = error.code || 'unknown';
+
+      // Errores del backend
+      if (error.response) {
+        const status = error.response.status;
+        const message = error.response.data?.message;
+
+        if (status === 400) {
+          if (Array.isArray(message)) {
+            errorMessage = message.join(', ');
+          } else if (message?.includes('expirado')) {
+            errorMessage = 'Código de verificación expirado. Solicita uno nuevo.';
+            errorCode = 'code/expired';
+          } else if (message?.includes('inválido')) {
+            errorMessage = 'Código de verificación inválido. Verifica el código ingresado.';
+            errorCode = 'code/invalid';
+          } else {
+            errorMessage = message || 'Código inválido';
+          }
+        } else if (status === 404) {
+          errorMessage = 'Cliente no encontrado';
+          errorCode = 'client/not-found';
+        } else if (status === 500) {
+          errorMessage = message || 'Error del servidor. Intenta más tarde.';
+          errorCode = 'server/error';
+        } else {
+          errorMessage = message || `Error del servidor (${status})`;
+          errorCode = `backend/${status}`;
+        }
+      }
+      // Errores de red
+      else if (error.request || error.code === 'ECONNABORTED') {
+        errorMessage = 'No se pudo conectar al servidor. Verifica tu conexión a internet.';
+        errorCode = 'network/connection-failed';
+      }
+      // Otros errores
+      else {
+        errorMessage = error.message || 'Error inesperado al verificar código';
+      }
+
+      return {
+        success: false,
+        error: errorMessage,
+        errorCode: errorCode,
+      };
     }
   },
 };

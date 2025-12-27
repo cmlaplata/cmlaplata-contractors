@@ -4,15 +4,22 @@ import { auth } from '../config/firebase';
 import { authService, User } from '../services/authService';
 import axiosInstance from '../config/axios';
 import { API_BASE_URL } from '../config/api';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 interface AuthContextType {
   user: User | null;
   firebaseUser: FirebaseUser | null;
   loading: boolean;
   login: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
+  loginWithPhone: (phone: string, code: string) => Promise<{ success: boolean; error?: string }>;
+  requestVerificationCode: (phone: string) => Promise<{ success: boolean; message?: string; error?: string }>;
   logout: () => Promise<void>;
   isAuthenticated: boolean;
   error: string | null;
+  refreshUserClientData: () => Promise<void>;
+  savePendingDeepLink: (url: string) => Promise<void>;
+  getPendingDeepLink: () => Promise<string | null>;
+  clearPendingDeepLink: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -24,6 +31,40 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [error, setError] = useState<string | null>(null);
   const isInitialized = useRef(false);
 
+  // Función auxiliar para guardar sesión completa
+  const saveUserSession = async (userData: User, token: string, method: 'firebase' | 'phone') => {
+    try {
+      const promises = [
+        AsyncStorage.setItem('api_auth_token', token),
+        AsyncStorage.setItem('auth_method', method),
+        // 👇 ESTA ES LA LÍNEA CLAVE QUE FALTABA
+        AsyncStorage.setItem('user_data', JSON.stringify(userData))
+      ];
+      await Promise.all(promises);
+      console.log('💾 Sesión completa guardada en AsyncStorage');
+    } catch (e) {
+      console.error('❌ Error guardando sesión:', e);
+    }
+  };
+
+  // Función para restaurar usuario desde AsyncStorage
+  const loadUserFromStorage = async (): Promise<boolean> => {
+    try {
+      // Intentar recuperar los datos del usuario guardados
+      const storedUser = await AsyncStorage.getItem('user_data');
+      
+      if (storedUser) {
+        const parsedUser = JSON.parse(storedUser) as User;
+        console.log('💾 Usuario restaurado desde almacenamiento local');
+        setUser(parsedUser); // <--- ESTO RESTAURA LA SESIÓN EN REACT
+        return true; // Indicamos que tuvimos éxito
+      }
+    } catch (error) {
+      console.error('❌ Error restaurando usuario local:', error);
+    }
+    return false;
+  };
+
   useEffect(() => {
     // Inicializar persistencia al montar el componente
     const initializeAuth = async () => {
@@ -31,6 +72,29 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         console.log('🚀 Inicializando AuthProvider...');
         try {
           await authService.initializePersistence();
+          
+          // LÓGICA CORREGIDA: Restaurar usuario desde AsyncStorage
+          const authMethod = await authService.getAuthMethod();
+          
+          if (authMethod === 'phone') {
+            const apiToken = await authService.getApiToken();
+            if (apiToken) {
+              console.log('📱 Sesión de teléfono detectada');
+              // Intentamos restaurar los datos del usuario
+              const restored = await loadUserFromStorage();
+              
+              if (!restored) {
+                // ⚠️ Si tenemos token pero NO datos de usuario, intentar recargar desde backend
+                console.log('⚠️ Token existe pero faltan datos de usuario, intentando recargar...');
+                // Nota: El usuario se cargará cuando se verifique la sesión más abajo
+              }
+            }
+          } else if (authMethod === 'firebase') {
+            // Mientras esperamos a onAuthStateChanged, cargamos lo local para que no se vea vacío
+            console.log('🔥 Sesión de Firebase detectada, cargando datos locales...');
+            await loadUserFromStorage();
+          }
+          
           isInitialized.current = true;
         } catch (error) {
           console.error('⚠️ Error inicializando persistencia:', error);
@@ -147,6 +211,9 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             setUser(userData);
             setFirebaseUser(firebaseUser);
             setError(null);
+            
+            // Guardar sesión completa en AsyncStorage
+            await saveUserSession(userData, idToken, 'firebase');
           } catch (error: any) {
             console.warn('⚠️ Error obteniendo datos del usuario:', {
               code: error.code,
@@ -158,28 +225,73 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
             // Determinar el tipo de error
             let errorMessage = 'Error al cargar datos del usuario';
+            let shouldClearSession = false;
             
             if (error.response) {
               const status = error.response.status;
               if (status === 404) {
                 errorMessage = 'Usuario no encontrado en el sistema. Contacta al administrador.';
+                // Solo limpiar sesión si el usuario no existe (404)
+                shouldClearSession = true;
               } else if (status === 401) {
                 errorMessage = 'Token inválido. Por favor, inicia sesión nuevamente.';
+                // Solo limpiar sesión si el token es inválido (401)
+                shouldClearSession = true;
               } else if (status >= 500) {
                 errorMessage = 'Error del servidor. Intenta más tarde.';
+                // NO limpiar sesión en errores del servidor - mantener Firebase auth
+                // El usuario puede seguir usando la app con datos en caché
+                shouldClearSession = false;
               } else {
                 errorMessage = `Error del servidor (${status})`;
+                // NO limpiar sesión en otros errores - mantener Firebase auth
+                shouldClearSession = false;
               }
             } else if (error.request) {
               errorMessage = 'No se pudo conectar al servidor. Verifica tu conexión.';
+              // NO limpiar sesión en errores de red - mantener Firebase auth
+              // El usuario puede seguir usando la app con datos en caché
+              shouldClearSession = false;
+            } else {
+              // Otros errores - mantener Firebase auth
+              shouldClearSession = false;
             }
-
-            // Si el usuario no existe en la BD, podría ser un nuevo usuario
-            setUser(null);
-            setFirebaseUser(null);
+            
+            // Solo limpiar sesión si es necesario (404 o 401)
+            // En otros casos, mantener firebaseUser para que la sesión persista
+            if (shouldClearSession) {
+              setUser(null);
+              setFirebaseUser(null);
+            } else {
+              // Mantener firebaseUser pero limpiar user (datos del backend)
+              // Esto permite que la sesión persista y se reintente obtener los datos
+              setUser(null);
+              // firebaseUser se mantiene, así que onAuthStateChanged puede reintentar
+            }
+            
             setError(errorMessage);
           }
         } else {
+          // Verificar si hay sesión de teléfono cuando no hay Firebase
+          const authMethod = await AsyncStorage.getItem('auth_method');
+          if (authMethod === 'phone') {
+            const apiToken = await AsyncStorage.getItem('api_auth_token');
+            if (apiToken) {
+              console.log('📱 Sesión de teléfono activa (sin Firebase)');
+              // Intentar restaurar el usuario desde AsyncStorage
+              const restored = await loadUserFromStorage();
+              
+              if (!restored) {
+                // Si tenemos token pero NO datos de usuario, intentar recargar desde backend
+                console.log('⚠️ Token existe pero faltan datos de usuario, intentando recargar...');
+                // Aquí podrías hacer una llamada al backend para obtener el perfil del usuario
+                // Por ahora, dejamos que el usuario se cargue cuando se haga una petición
+              }
+              setLoading(false);
+              return;
+            }
+          }
+          
           console.log('👋 Usuario cerró sesión o no hay sesión activa');
           setUser(null);
           setFirebaseUser(null);
@@ -195,9 +307,15 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       (error) => {
         // Manejar errores del observador
         console.error('❌ Error en onAuthStateChanged:', error);
-        setUser(null);
-        setFirebaseUser(null);
-        setError('Error al verificar el estado de autenticación');
+        // NO limpiar la sesión en errores del observador
+        // Firebase puede tener problemas temporales pero la sesión puede persistir
+        // Solo mostrar el error pero mantener la sesión si existe
+        if (auth.currentUser) {
+          console.log('⚠️ Error en observador pero hay sesión activa, manteniendo sesión');
+          // Mantener firebaseUser si existe
+          setFirebaseUser(auth.currentUser);
+        }
+        setError('Error al verificar el estado de autenticación. Reintentando...');
         setLoading(false);
       }
     );
@@ -237,14 +355,162 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     // cuando detecte el cambio de estado de autenticación
   };
 
+  const loginWithPhone = async (phone: string, code: string) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const result = await authService.verifyCodeAndLogin(phone, code);
+      
+      if (result.success && result.user) {
+        console.log('✅ Login con teléfono exitoso');
+        // Establecer el usuario directamente ya que no hay Firebase
+        setUser(result.user);
+        setFirebaseUser(null);
+        
+        // Guardar sesión completa en AsyncStorage
+        const apiToken = await authService.getApiToken();
+        if (apiToken) {
+          await saveUserSession(result.user, apiToken, 'phone');
+        }
+        
+        setLoading(false);
+        return { success: true };
+      } else {
+        const errorMsg = result.error || 'Error al iniciar sesión';
+        setError(errorMsg);
+        setLoading(false);
+        return { success: false, error: errorMsg };
+      }
+    } catch (err: any) {
+      const errorMsg = err.message || 'Error al iniciar sesión';
+      setError(errorMsg);
+      setLoading(false);
+      return { success: false, error: errorMsg };
+    }
+  };
+
+  const requestVerificationCode = async (phone: string) => {
+    setError(null);
+    try {
+      const result = await authService.requestVerificationCode(phone);
+      return result;
+    } catch (err: any) {
+      const errorMsg = err.message || 'Error al solicitar código';
+      setError(errorMsg);
+      return { success: false, error: errorMsg };
+    }
+  };
+
   const logout = async () => {
     try {
       await authService.logout();
+      // Limpiar también los datos del usuario guardados
+      await AsyncStorage.removeItem('user_data');
       setUser(null);
       setFirebaseUser(null);
+      setError(null);
     } catch (error) {
       console.error('Error logging out:', error);
       throw error;
+    }
+  };
+
+  const refreshUserClientData = async () => {
+    if (!user?.clientId) {
+      console.log('⚠️ No hay clientId para refrescar datos del cliente');
+      return;
+    }
+
+    try {
+      console.log('🔄 Refrescando datos del cliente...');
+      const clientUrl = `${API_BASE_URL}/clients/get/client/${user.clientId}`;
+      console.log('🌐 Consultando cliente:', clientUrl);
+      
+      const clientResponse = await axiosInstance.get(clientUrl);
+      
+      console.log('✅ Datos del cliente refrescados:', {
+        status: clientResponse.status,
+        data: clientResponse.data,
+      });
+      
+      // Agregar los datos del cliente al objeto user
+      const clientData = Array.isArray(clientResponse.data) 
+        ? clientResponse.data[0] 
+        : clientResponse.data;
+      
+      // Actualizar el estado del usuario con los nuevos datos del cliente
+      setUser(prevUser => {
+        if (!prevUser) return null;
+        return {
+          ...prevUser,
+          userClientData: clientData,
+        };
+      });
+      
+      // Guardar usuario actualizado en AsyncStorage (después de actualizar el estado)
+      const updatedUser = {
+        ...user!,
+        userClientData: clientData,
+      };
+      
+      try {
+        const authMethod = await AsyncStorage.getItem('auth_method');
+        if (authMethod === 'phone') {
+          const apiToken = await AsyncStorage.getItem('api_auth_token');
+          if (apiToken) {
+            await saveUserSession(updatedUser, apiToken, 'phone');
+          }
+        } else if (authMethod === 'firebase' && firebaseUser) {
+          const token = await firebaseUser.getIdToken();
+          await saveUserSession(updatedUser, token, 'firebase');
+        }
+      } catch (saveError) {
+        console.warn('⚠️ Error guardando usuario actualizado:', saveError);
+      }
+      
+      console.log('📋 USUARIO ACTUALIZADO CON NUEVOS DATOS DEL CLIENTE:', {
+        userId: user.id,
+        clientId: user.clientId,
+        urlgooglemybusiness: clientData?.urlgooglemybusiness,
+      });
+    } catch (clientError: any) {
+      console.warn('⚠️ Error refrescando datos del cliente:', {
+        code: clientError.code,
+        message: clientError.message,
+        response: clientError.response?.data,
+        status: clientError.response?.status,
+      });
+    }
+  };
+
+  const savePendingDeepLink = async (url: string) => {
+    try {
+      await AsyncStorage.setItem('pending_deep_link', url);
+      console.log('💾 Deep link guardado:', url);
+    } catch (error) {
+      console.error('❌ Error guardando deep link:', error);
+    }
+  };
+
+  const getPendingDeepLink = async (): Promise<string | null> => {
+    try {
+      const url = await AsyncStorage.getItem('pending_deep_link');
+      if (url) {
+        console.log('📖 Deep link pendiente encontrado:', url);
+      }
+      return url;
+    } catch (error) {
+      console.error('❌ Error obteniendo deep link:', error);
+      return null;
+    }
+  };
+
+  const clearPendingDeepLink = async () => {
+    try {
+      await AsyncStorage.removeItem('pending_deep_link');
+      console.log('🗑️ Deep link pendiente eliminado');
+    } catch (error) {
+      console.error('❌ Error eliminando deep link:', error);
     }
   };
 
@@ -255,9 +521,16 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         firebaseUser,
         loading,
         login,
+        loginWithPhone,
+        requestVerificationCode,
         logout,
-        isAuthenticated: !!user,
+        // Considerar autenticado si hay firebaseUser (Firebase) o user (teléfono)
+        isAuthenticated: !!firebaseUser || !!user,
         error,
+        refreshUserClientData,
+        savePendingDeepLink,
+        getPendingDeepLink,
+        clearPendingDeepLink,
       }}
     >
       {children}

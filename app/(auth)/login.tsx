@@ -2,21 +2,162 @@ import React, { useState } from 'react';
 import { View, Text, StyleSheet, TextInput, TouchableOpacity, ActivityIndicator, ScrollView, Platform } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useAuth } from '../../src/context/AuthContext';
-import { API_BASE_URL } from '../../src/config/api';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../../src/theme/colors';
 
+type LoginTab = 'phone' | 'password';
+
 export default function LoginScreen() {
+  const [activeTab, setActiveTab] = useState<LoginTab>('phone');
+  
+  // Estados para login con teléfono
+  const [phone, setPhone] = useState('');
+  const [code, setCode] = useState('');
+  const [codeSent, setCodeSent] = useState(false);
+  const [requestingCode, setRequestingCode] = useState(false);
+  const [verifyingCode, setVerifyingCode] = useState(false);
+  
+  // Estados para login con contraseña
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  
+  // Estados compartidos
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [errorDetails, setErrorDetails] = useState<string | null>(null);
   const [showDetails, setShowDetails] = useState(false);
-  const [showPassword, setShowPassword] = useState(false);
-  const { login } = useAuth();
+  
+  const { login, loginWithPhone, requestVerificationCode } = useAuth();
   const router = useRouter();
 
+  // Normalizar número de teléfono (remover espacios, guiones, paréntesis)
+  const normalizePhone = (phoneNumber: string): string => {
+    return phoneNumber.replace(/[\s\-\(\)]/g, '');
+  };
+
+  // Validar formato de teléfono
+  const validatePhone = (phoneNumber: string): boolean => {
+    const normalized = normalizePhone(phoneNumber);
+    // Acepta números con o sin código de país
+    return normalized.length >= 10 && /^\d+$/.test(normalized);
+  };
+
+  // Validar código de 6 dígitos
+  const validateCode = (codeValue: string): boolean => {
+    return /^\d{6}$/.test(codeValue);
+  };
+
+  // Función para pegar código desde el portapapeles
+  const handlePasteCode = async () => {
+    try {
+      let clipboardContent = '';
+      
+      if (Platform.OS === 'web') {
+        // Para web, usar la API del navegador
+        if (navigator.clipboard && navigator.clipboard.readText) {
+          clipboardContent = await navigator.clipboard.readText();
+        }
+      } else {
+        // Para móvil, usar expo-clipboard
+        try {
+          const Clipboard = require('expo-clipboard');
+          clipboardContent = await Clipboard.getStringAsync();
+        } catch {
+          console.warn('Clipboard no disponible');
+        }
+      }
+      
+      // Limpiar el contenido del portapapeles (solo números)
+      const numericCode = clipboardContent.replace(/[^\d]/g, '').slice(0, 6);
+      if (numericCode.length > 0) {
+        setCode(numericCode);
+        setError(null);
+      }
+    } catch (error) {
+      console.error('Error al pegar código:', error);
+    }
+  };
+
+  // Función para volver atrás y modificar el número de teléfono
+  const handleBackToPhone = () => {
+    setCodeSent(false);
+    setCode('');
+    setError(null);
+  };
+
+  // Solicitar código de verificación
+  const handleRequestCode = async () => {
+    setError(null);
+    setErrorDetails(null);
+    setShowDetails(false);
+
+    if (!validatePhone(phone)) {
+      setError('Ingrese un número de teléfono válido');
+      return;
+    }
+
+    try {
+      setRequestingCode(true);
+      const normalizedPhone = normalizePhone(phone);
+      const result = await requestVerificationCode(normalizedPhone);
+
+      if (result.success) {
+        setCodeSent(true);
+        setError(null);
+      } else {
+        setError(result.error || 'Error al solicitar código');
+      }
+    } catch (error: any) {
+      setError(error?.message || 'Error inesperado al solicitar código');
+    } finally {
+      setRequestingCode(false);
+    }
+  };
+
+  // Verificar código y autenticar
+  const handleVerifyCode = async () => {
+    setError(null);
+    setErrorDetails(null);
+    setShowDetails(false);
+
+    if (!validateCode(code)) {
+      setError('El código debe tener 6 dígitos');
+      return;
+    }
+
+    try {
+      setVerifyingCode(true);
+      setError(null);
+      const normalizedPhone = normalizePhone(phone);
+      
+      const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('Tiempo de espera agotado. Verifica tu conexión.')), 15000);
+      });
+      
+      const result = await Promise.race([
+        loginWithPhone(normalizedPhone, code),
+        timeoutPromise
+      ]) as any;
+
+      if (result.success) {
+        console.log('✅ Login exitoso, redirigiendo...');
+        setError(null);
+      } else {
+        const errorMsg = result.error || 'Error al verificar código';
+        setError(errorMsg);
+        setErrorDetails(`Código de error: ${result.errorCode || 'unknown'}`);
+      }
+    } catch (error: any) {
+      const errorMsg = error?.message || 'Error inesperado al verificar código';
+      setError(errorMsg);
+      setErrorDetails(`Error: ${JSON.stringify(error, null, 2)}`);
+    } finally {
+      setVerifyingCode(false);
+    }
+  };
+
+  // Login con email y contraseña
   const handleLogin = async () => {
     setError(null);
     setErrorDetails(null);
@@ -38,7 +179,6 @@ export default function LoginScreen() {
       setError(null);
       console.log('🚀 Iniciando login desde componente...');
       
-      // Timeout de seguridad para evitar que se quede cargando indefinidamente
       const timeoutPromise = new Promise((_, reject) => {
         setTimeout(() => reject(new Error('Tiempo de espera agotado. Verifica tu conexión.')), 15000);
       });
@@ -78,6 +218,18 @@ export default function LoginScreen() {
     }
   };
 
+  // Resetear formulario de teléfono al cambiar de pestaña
+  const handleTabChange = (tab: LoginTab) => {
+    setActiveTab(tab);
+    setError(null);
+    setErrorDetails(null);
+    setShowDetails(false);
+    if (tab === 'phone') {
+      setCodeSent(false);
+      setCode('');
+    }
+  };
+
   return (
     <ScrollView 
       style={styles.container}
@@ -85,76 +237,268 @@ export default function LoginScreen() {
       keyboardShouldPersistTaps="handled"
     >
       <View style={styles.content}>
-        
         <Text style={styles.title}>Bienvenido</Text>
         <Text style={styles.subtitle}>Inicia sesión para continuar</Text>
 
-        <View style={styles.form}>
-          <View style={styles.inputGroup}>
-            <Text style={styles.label}>Email</Text>
-            <View style={styles.inputContainer}>
-              <Ionicons name="mail-outline" size={20} color={colors.textSecondary} style={styles.inputIcon} />
-              <TextInput
-                style={[styles.input, error && styles.inputError]}
-                placeholder="tu@email.com"
-                placeholderTextColor={colors.textTertiary}
-                value={email}
-                onChangeText={(text) => {
-                  setEmail(text);
-                  setError(null);
-                }}
-                keyboardType="email-address"
-                autoCapitalize="none"
-                autoComplete={Platform.OS === 'android' ? 'email' : 'email'}
-                textContentType="emailAddress"
-                autoCorrect={false}
-                editable={!loading}
-                textAlignVertical="center"
-                {...(Platform.OS === 'android' && {
-                  includeFontPadding: false,
-                  importantForAutofill: 'yes' as any,
-                })}
-              />
-            </View>
-          </View>
+        {/* Pestañas */}
+        <View style={styles.tabsContainer}>
+          <TouchableOpacity
+            style={[styles.tab, activeTab === 'phone' && styles.tabActive]}
+            onPress={() => handleTabChange('phone')}
+            activeOpacity={0.7}
+          >
+            <Ionicons 
+              name="call-outline" 
+              size={20} 
+              color={activeTab === 'phone' ? colors.primary : colors.textSecondary} 
+            />
+            <Text style={[styles.tabText, activeTab === 'phone' && styles.tabTextActive]}>
+              Teléfono
+            </Text>
+          </TouchableOpacity>
+          
+          <TouchableOpacity
+            style={[styles.tab, activeTab === 'password' && styles.tabActive]}
+            onPress={() => handleTabChange('password')}
+            activeOpacity={0.7}
+          >
+            <Ionicons 
+              name="lock-closed-outline" 
+              size={20} 
+              color={activeTab === 'password' ? colors.primary : colors.textSecondary} 
+            />
+            <Text style={[styles.tabText, activeTab === 'password' && styles.tabTextActive]}>
+              Contraseña
+            </Text>
+          </TouchableOpacity>
+        </View>
 
-          <View style={styles.inputGroup}>
-            <Text style={styles.label}>Contraseña</Text>
-            <View style={styles.inputContainer}>
-              <Ionicons name="lock-closed-outline" size={20} color={colors.textSecondary} style={styles.inputIcon} />
-              <TextInput
-                style={[styles.input, error && styles.inputError]}
-                placeholder="••••••••"
-                placeholderTextColor={colors.textTertiary}
-                value={password}
-                onChangeText={(text) => {
-                  setPassword(text);
-                  setError(null);
-                }}
-                secureTextEntry={!showPassword}
-                autoComplete={Platform.OS === 'android' ? 'password' : 'password'}
-                textContentType="password"
-                autoCapitalize="none"
-                autoCorrect={false}
-                editable={!loading}
-                textAlignVertical="center"
-                {...(Platform.OS === 'android' && {
-                  includeFontPadding: false,
-                  importantForAutofill: 'yes' as any,
-                })}
-              />
+        <View style={styles.form}>
+          {/* Formulario de teléfono */}
+          {activeTab === 'phone' && (
+            <>
+              {/* Input de teléfono - solo se muestra si NO se ha enviado el código */}
+              {!codeSent && (
+                <View style={styles.inputGroup}>
+                  <Text style={styles.label}>Número de teléfono</Text>
+                  <View style={styles.inputContainer}>
+                    <Ionicons name="call-outline" size={20} color={colors.textSecondary} style={styles.inputIcon} />
+                    <TextInput
+                      style={[styles.input, error && styles.inputError]}
+                      placeholder=""
+                      placeholderTextColor={colors.textTertiary}
+                      value={phone}
+                      onChangeText={(text) => {
+                        setPhone(text);
+                        setError(null);
+                      }}
+                      keyboardType="phone-pad"
+                      autoComplete={Platform.OS === 'android' ? 'tel' : 'tel'}
+                      textContentType="telephoneNumber"
+                      autoCorrect={false}
+                      editable={!requestingCode && !verifyingCode}
+                      textAlignVertical="center"
+                      {...(Platform.OS === 'android' && {
+                        includeFontPadding: false,
+                      })}
+                    />
+                  </View>
+                </View>
+              )}
+
+              {/* Input de código - solo se muestra si se ha enviado el código */}
+              {codeSent && (
+                <>
+                  <View style={styles.inputGroup}>
+                    <Text style={styles.label}>Código de verificación</Text>
+                    <View style={styles.inputContainer}>
+                      <Ionicons name="key-outline" size={20} color={colors.textSecondary} style={styles.inputIcon} />
+                      <TextInput
+                        style={[styles.input, error && styles.inputError]}
+                        placeholder="123456"
+                        placeholderTextColor={colors.textTertiary}
+                        value={code}
+                        onChangeText={(text) => {
+                          // Solo permitir números y máximo 6 dígitos
+                          const numericText = text.replace(/[^\d]/g, '').slice(0, 6);
+                          setCode(numericText);
+                          setError(null);
+                        }}
+                        keyboardType="number-pad"
+                        autoComplete="off"
+                        autoCorrect={false}
+                        editable={!verifyingCode}
+                        textAlignVertical="center"
+                        maxLength={6}
+                        {...(Platform.OS === 'android' && {
+                          includeFontPadding: false,
+                        })}
+                      />
+                      {/* Botón para pegar código */}
+                      <TouchableOpacity
+                        onPress={handlePasteCode}
+                        style={styles.pasteButton}
+                        activeOpacity={0.7}
+                        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                      >
+                        <Ionicons name="clipboard-outline" size={20} color={colors.primary} />
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                </>
+              )}
+
+              {!codeSent ? (
+                <TouchableOpacity
+                  style={[styles.button, (requestingCode || !phone) && styles.buttonDisabled]}
+                  onPress={handleRequestCode}
+                  disabled={requestingCode || !phone}
+                  activeOpacity={0.8}
+                >
+                  {requestingCode ? (
+                    <View style={styles.loadingContainer}>
+                      <ActivityIndicator color="#fff" size="small" />
+                      <Text style={styles.buttonText}>Enviando código...</Text>
+                    </View>
+                  ) : (
+                    <View style={styles.buttonContent}>
+                      <Text style={styles.buttonText}>Enviar código</Text>
+                      <Ionicons name="send-outline" size={20} color="#fff" />
+                    </View>
+                  )}
+                </TouchableOpacity>
+              ) : (
+                <>
+                  <TouchableOpacity
+                    style={[styles.button, (verifyingCode || !code || code.length !== 6) && styles.buttonDisabled]}
+                    onPress={handleVerifyCode}
+                    disabled={verifyingCode || !code || code.length !== 6}
+                    activeOpacity={0.8}
+                  >
+                    {verifyingCode ? (
+                      <View style={styles.loadingContainer}>
+                        <ActivityIndicator color="#fff" size="small" />
+                        <Text style={styles.buttonText}>Verificando...</Text>
+                      </View>
+                    ) : (
+                      <View style={styles.buttonContent}>
+                        <Text style={styles.buttonText}>Verificar código</Text>
+                        <Ionicons name="checkmark-circle-outline" size={20} color="#fff" />
+                      </View>
+                    )}
+                  </TouchableOpacity>
+                  
+                  {/* Botón para volver atrás y modificar el número */}
+                  <TouchableOpacity
+                    onPress={handleBackToPhone}
+                    style={styles.backButton}
+                    activeOpacity={0.7}
+                  >
+                    <Ionicons name="arrow-back" size={20} color={colors.primary} />
+                    <Text style={styles.backButtonText}>Modificar número de teléfono</Text>
+                  </TouchableOpacity>
+                  
+                  <TouchableOpacity
+                    onPress={handleRequestCode}
+                    style={styles.resendButton}
+                  >
+                    <Text style={styles.resendButtonText}>Solicitar código de nuevo</Text>
+                  </TouchableOpacity>
+                </>
+              )}
+            </>
+          )}
+
+          {/* Formulario de contraseña */}
+          {activeTab === 'password' && (
+            <>
+              <View style={styles.inputGroup}>
+                <Text style={styles.label}>Email</Text>
+                <View style={styles.inputContainer}>
+                  <Ionicons name="mail-outline" size={20} color={colors.textSecondary} style={styles.inputIcon} />
+                  <TextInput
+                    style={[styles.input, error && styles.inputError]}
+                    placeholder="tu@email.com"
+                    placeholderTextColor={colors.textTertiary}
+                    value={email}
+                    onChangeText={(text) => {
+                      setEmail(text);
+                      setError(null);
+                    }}
+                    keyboardType="email-address"
+                    autoCapitalize="none"
+                    autoComplete={Platform.OS === 'android' ? 'email' : 'email'}
+                    textContentType="emailAddress"
+                    autoCorrect={false}
+                    editable={!loading}
+                    textAlignVertical="center"
+                    {...(Platform.OS === 'android' && {
+                      includeFontPadding: false,
+                      importantForAutofill: 'yes' as any,
+                    })}
+                  />
+                </View>
+              </View>
+
+              <View style={styles.inputGroup}>
+                <Text style={styles.label}>Contraseña</Text>
+                <View style={styles.inputContainer}>
+                  <Ionicons name="lock-closed-outline" size={20} color={colors.textSecondary} style={styles.inputIcon} />
+                  <TextInput
+                    style={[styles.input, error && styles.inputError]}
+                    placeholder="••••••••"
+                    placeholderTextColor={colors.textTertiary}
+                    value={password}
+                    onChangeText={(text) => {
+                      const textWithoutSpaces = text.replace(/\s/g, '');
+                      setPassword(textWithoutSpaces);
+                      setError(null);
+                    }}
+                    secureTextEntry={!showPassword}
+                    autoComplete={Platform.OS === 'android' ? 'password' : 'password'}
+                    textContentType="password"
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    editable={!loading}
+                    textAlignVertical="center"
+                    {...(Platform.OS === 'android' && {
+                      includeFontPadding: false,
+                      importantForAutofill: 'yes' as any,
+                    })}
+                  />
+                  <TouchableOpacity
+                    onPress={() => setShowPassword(!showPassword)}
+                    style={styles.eyeIcon}
+                  >
+                    <Ionicons 
+                      name={showPassword ? "eye-outline" : "eye-off-outline"} 
+                      size={20} 
+                      color={colors.textSecondary} 
+                    />
+                  </TouchableOpacity>
+                </View>
+              </View>
+
               <TouchableOpacity
-                onPress={() => setShowPassword(!showPassword)}
-                style={styles.eyeIcon}
+                style={[styles.button, loading && styles.buttonDisabled]}
+                onPress={handleLogin}
+                disabled={loading}
+                activeOpacity={0.8}
               >
-                <Ionicons 
-                  name={showPassword ? "eye-outline" : "eye-off-outline"} 
-                  size={20} 
-                  color={colors.textSecondary} 
-                />
+                {loading ? (
+                  <View style={styles.loadingContainer}>
+                    <ActivityIndicator color="#fff" size="small" />
+                    <Text style={styles.buttonText}>Iniciando sesión...</Text>
+                  </View>
+                ) : (
+                  <View style={styles.buttonContent}>
+                    <Text style={styles.buttonText}>Iniciar Sesión</Text>
+                    <Ionicons name="arrow-forward" size={20} color="#fff" />
+                  </View>
+                )}
               </TouchableOpacity>
-            </View>
-          </View>
+            </>
+          )}
 
           {error && (
             <View style={styles.errorContainer}>
@@ -179,25 +523,6 @@ export default function LoginScreen() {
               )}
             </View>
           )}
-
-          <TouchableOpacity
-            style={[styles.button, loading && styles.buttonDisabled]}
-            onPress={handleLogin}
-            disabled={loading}
-            activeOpacity={0.8}
-          >
-            {loading ? (
-              <View style={styles.loadingContainer}>
-                <ActivityIndicator color="#fff" size="small" />
-                <Text style={styles.buttonText}>Iniciando sesión...</Text>
-              </View>
-            ) : (
-              <View style={styles.buttonContent}>
-                <Text style={styles.buttonText}>Iniciar Sesión</Text>
-                <Ionicons name="arrow-forward" size={20} color="#fff" />
-              </View>
-            )}
-          </TouchableOpacity>
         </View>
       </View>
     </ScrollView>
@@ -224,19 +549,6 @@ const styles = StyleSheet.create({
     shadowRadius: 20,
     elevation: 8,
   },
-  logoContainer: {
-    alignItems: 'center',
-    marginBottom: 32,
-  },
-  logoCircle: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: colors.primaryLight + '20',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 16,
-  },
   title: {
     fontSize: 32,
     fontWeight: '700',
@@ -248,9 +560,43 @@ const styles = StyleSheet.create({
   subtitle: {
     fontSize: 16,
     color: colors.textSecondary,
-    marginBottom: 32,
+    marginBottom: 24,
     textAlign: 'center',
     fontWeight: '400',
+  },
+  tabsContainer: {
+    flexDirection: 'row',
+    backgroundColor: colors.backgroundTertiary,
+    borderRadius: 12,
+    padding: 4,
+    marginBottom: 24,
+    gap: 4,
+  },
+  tab: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    gap: 8,
+  },
+  tabActive: {
+    backgroundColor: colors.backgroundSecondary,
+    shadowColor: colors.primary,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  tabText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: colors.textSecondary,
+  },
+  tabTextActive: {
+    color: colors.primary,
   },
   form: {
     gap: 20,
@@ -290,6 +636,38 @@ const styles = StyleSheet.create({
   },
   eyeIcon: {
     padding: 4,
+  },
+  backButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    marginBottom: 4,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    alignSelf: 'center',
+  },
+  backButtonText: {
+    color: colors.primary,
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  pasteButton: {
+    padding: Platform.OS === 'android' ? 12 : 8,
+    marginLeft: 8,
+    minWidth: 44,
+    minHeight: 44,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  resendButton: {
+    marginTop: 0,
+    alignSelf: 'center',
+  },
+  resendButtonText: {
+    color: colors.textSecondary,
+    fontSize: 13,
+    fontWeight: '500',
   },
   errorContainer: {
     backgroundColor: colors.error + '10',
@@ -363,10 +741,5 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
-  },
-  loadingText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '600',
   },
 });

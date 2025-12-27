@@ -1,13 +1,13 @@
 {
   "expo": {
-    "name": "Desarrollo",
-    "slug": "Desarrollo",
+    "name": "CM La Plata",
+    "slug": "cm-la-plata",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
-    "scheme": "cmlaplatacontractors",
+    "scheme": "cmlaplata",
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
@@ -15,7 +15,10 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.desarrollo.app"
+      "bundleIdentifier": "com.cmlaplata.app",
+      "runtimeVersion": {
+        "policy": "appVersion"
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -23,7 +26,10 @@
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
-      "package": "com.desarrollo.app"
+      "package": "com.cmlaplata.app",
+      "name": "CM La Plata",
+      "usesCleartextTraffic": true,
+      "runtimeVersion": "1.0.0"
     },
     "web": {
       "favicon": "./assets/favicon.png",
@@ -33,7 +39,14 @@
       "expo-router"
     ],
     "updates": {
-      "enabled": false
+      "enabled": true,
+      "url": "https://u.expo.dev/7df3484a-5cb4-4c12-92a0-9356e6fb0143"
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "7df3484a-5cb4-4c12-92a0-9356e6fb0143"
+      }
     }
   }
 }

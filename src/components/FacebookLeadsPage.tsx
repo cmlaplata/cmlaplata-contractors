@@ -1,5 +1,5 @@
-import React, { useState, useRef } from 'react';
-import { View, StyleSheet, TouchableOpacity, Text, Alert, ActivityIndicator, Modal, Platform, ScrollView, Image } from 'react-native';
+import React, { useState, useRef, useEffect } from 'react';
+import { View, StyleSheet, TouchableOpacity, Text, Alert, ActivityIndicator, Modal, Platform, ScrollView, Image, Linking } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { FacebookLeadsList, FacebookLeadsListRef } from './FacebookLeadsList';
 import { LeadForm } from './LeadForm';
@@ -10,19 +10,42 @@ import { useAuth } from '../context/AuthContext';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../theme/colors';
+import { useDebugLog } from '../context/DebugLogContext';
 
 const isMobile = Platform.OS !== 'web';
 
-export const FacebookLeadsPage: React.FC = () => {
+interface FacebookLeadsPageProps {
+  leadId?: number;
+}
+
+export const FacebookLeadsPage: React.FC<FacebookLeadsPageProps> = ({ leadId }) => {
   const [showForm, setShowForm] = useState(false);
   const [editingLead, setEditingLead] = useState<FacebookLead | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showMobileDrawer, setShowMobileDrawer] = useState(false);
   const [showLogoutModal, setShowLogoutModal] = useState(false);
+  const [showNotificationsModal, setShowNotificationsModal] = useState(false);
   const listRef = useRef<FacebookLeadsListRef>(null);
   const { user, logout } = useAuth();
   const router = useRouter();
+  const { addLog } = useDebugLog();
+
+  // Log al montar
+  useEffect(() => {
+    addLog('🚀 COMPONENTE MONTADO', 'LEADS_PAGE');
+  }, []);
+
+  // Log cuando cambia el leadId
+  useEffect(() => {
+    addLog(`📥 leadId recibido: ${leadId} (tipo: ${typeof leadId})`, 'LEADS_PAGE');
+    if (leadId) {
+      addLog(`✅ leadId VÁLIDO, pasando a FacebookLeadsList`, 'LEADS_PAGE');
+    } else {
+      addLog(`ℹ️ leadId es falsy, NO filtrará`, 'LEADS_PAGE');
+    }
+  }, [leadId, addLog]);
+
   const {
     leadsNotificationAllDay,
     loading: notificationsLoading,
@@ -30,9 +53,8 @@ export const FacebookLeadsPage: React.FC = () => {
     toggleNotifications,
   } = useClientNotifications(user?.clientId);
 
-
-  console.log('📱 FacebookLeadsPage renderizado. user:', user);
-  console.log('📱 FacebookLeadsPage: user?.clientId:', user?.clientId);
+  // Deep links se manejan en [...unmatched].tsx y AuthGuard.tsx
+  // Este componente solo recibe el leadId como prop desde dashboard.tsx
 
   const handleEdit = (lead: FacebookLead) => {
     setEditingLead(lead);
@@ -126,7 +148,18 @@ export const FacebookLeadsPage: React.FC = () => {
           onCancel={handleFormCancel}
         />
       ) : (
-        <FacebookLeadsList ref={listRef} onEdit={handleEdit} onNew={handleNew} />
+        <FacebookLeadsList ref={listRef} onEdit={handleEdit} onNew={handleNew} filterLeadId={leadId} />
+      )}
+
+      {/* Botón flotante para volver cuando se muestra un lead específico */}
+      {leadId && !showForm && (
+        <TouchableOpacity
+          style={styles.floatingBackButton}
+          onPress={() => router.push('/(tabs)/dashboard')}
+          activeOpacity={0.8}
+        >
+          <Ionicons name="arrow-back" size={24} color="#fff" />
+        </TouchableOpacity>
       )}
 
       {/* Menú móvil - Drawer lateral */}
@@ -169,32 +202,24 @@ export const FacebookLeadsPage: React.FC = () => {
                 </Text>
               </View>
               <View style={styles.menuDivider} />
-              {user?.clientId && toggleNotifications && (
+              {user?.clientId && (
                 <TouchableOpacity
                   style={styles.menuItem}
-                  onPress={async () => {
-                    try {
-                      if (toggleNotifications) {
-                        await toggleNotifications();
-                      }
-                    } catch (err) {
-                      console.error('Error al cambiar notificaciones:', err);
-                    }
+                  onPress={() => {
+                    setShowUserMenu(false);
+                    setShowNotificationsModal(true);
                   }}
-                  disabled={notificationsLoading || notificationsUpdating || !toggleNotifications}
+                  disabled={notificationsUpdating}
                   activeOpacity={0.7}
                 >
                   <Ionicons 
-                    name={leadsNotificationAllDay ? 'notifications' : 'notifications-outline'} 
+                    name="notifications-outline" 
                     size={20} 
                     color="#fff" 
                   />
                   <Text style={[styles.menuItemText, { color: '#fff' }]}>
-                    {notificationsUpdating ? 'Actualizando...' : 'Recibir 24 horas'}
+                    Notificaciones
                   </Text>
-                  {notificationsUpdating && (
-                    <ActivityIndicator size="small" color="#fff" style={{ marginLeft: 8 }} />
-                  )}
                 </TouchableOpacity>
               )}
               <TouchableOpacity
@@ -209,6 +234,84 @@ export const FacebookLeadsPage: React.FC = () => {
           </TouchableOpacity>
         </Modal>
       )}
+
+      {/* Modal de configuración de notificaciones */}
+      <Modal
+        visible={showNotificationsModal}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setShowNotificationsModal(false)}
+      >
+        <TouchableOpacity
+          style={styles.notificationsModalOverlay}
+          activeOpacity={1}
+          onPress={() => setShowNotificationsModal(false)}
+        >
+          <View 
+            style={styles.notificationsModalContainer}
+            onStartShouldSetResponder={() => true}
+          >
+            <View style={styles.notificationsModalHeader}>
+              <Ionicons
+                name={leadsNotificationAllDay ? 'notifications' : 'notifications-off'}
+                size={32}
+                color={colors.primary}
+              />
+              <Text style={styles.notificationsModalTitle}>Notificaciones</Text>
+            </View>
+
+            <View style={styles.notificationsStatusContainer}>
+              <View style={[
+                styles.notificationsStatusBadge,
+                leadsNotificationAllDay ? styles.notificationsStatusActive : styles.notificationsStatusInactive
+              ]}>
+                <Text style={styles.notificationsStatusText}>
+                  {leadsNotificationAllDay ? 'Activado' : 'Desactivado'}
+                </Text>
+              </View>
+            </View>
+
+            <Text style={styles.notificationsModalMessage}>
+              {leadsNotificationAllDay
+                ? 'Actualmente recibes estimados por WhatsApp las 24 horas. Si lo desactivas, los estimados que lleguen durante la noche se guardarán y serán enviados durante la mañana.'
+                : 'Actualmente no recibes estimados durante la noche. Si lo activas, recibirás los estimados inmediatamente, incluso durante la noche.'}
+            </Text>
+
+            <View style={styles.notificationsModalButtons}>
+              <TouchableOpacity
+                style={[styles.notificationsModalButton, styles.notificationsModalButtonCancel]}
+                onPress={() => setShowNotificationsModal(false)}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.notificationsModalButtonCancelText}>Cancelar</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.notificationsModalButton, styles.notificationsModalButtonConfirm]}
+                onPress={async () => {
+                  try {
+                    if (toggleNotifications) {
+                      await toggleNotifications();
+                      setShowNotificationsModal(false);
+                    }
+                  } catch (err) {
+                    console.error('Error al cambiar notificaciones:', err);
+                  }
+                }}
+                disabled={notificationsUpdating}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.notificationsModalButtonConfirmText}>
+                  {notificationsUpdating 
+                    ? 'Actualizando...' 
+                    : leadsNotificationAllDay 
+                      ? 'Desactivar' 
+                      : 'Activar'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </TouchableOpacity>
+      </Modal>
 
       {/* Modal de confirmación de logout */}
       <Modal
@@ -424,6 +527,109 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
   },
   logoutModalButtonConfirmText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#fff',
+  },
+  floatingBackButton: {
+    position: 'absolute',
+    bottom: 20,
+    right: 20,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: colors.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
+    zIndex: 1000,
+  },
+  notificationsModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  notificationsModalContainer: {
+    backgroundColor: colors.backgroundSecondary,
+    borderRadius: 16,
+    width: '100%',
+    maxWidth: 400,
+    padding: 24,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  notificationsModalHeader: {
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  notificationsModalTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: colors.textPrimary,
+    marginTop: 12,
+    textAlign: 'center',
+  },
+  notificationsStatusContainer: {
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  notificationsStatusBadge: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+  },
+  notificationsStatusActive: {
+    backgroundColor: '#10b981',
+  },
+  notificationsStatusInactive: {
+    backgroundColor: '#6b7280',
+  },
+  notificationsStatusText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  notificationsModalMessage: {
+    fontSize: 15,
+    color: colors.textSecondary,
+    lineHeight: 22,
+    marginBottom: 24,
+    textAlign: 'center',
+  },
+  notificationsModalButtons: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  notificationsModalButton: {
+    flex: 1,
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  notificationsModalButtonCancel: {
+    backgroundColor: colors.backgroundTertiary,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  notificationsModalButtonConfirm: {
+    backgroundColor: colors.primary,
+  },
+  notificationsModalButtonCancelText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: colors.textPrimary,
+  },
+  notificationsModalButtonConfirmText: {
     fontSize: 16,
     fontWeight: '600',
     color: '#fff',

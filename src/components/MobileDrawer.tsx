@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -7,6 +7,7 @@ import {
   Animated,
   Dimensions,
   TouchableWithoutFeedback,
+  Modal,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../theme/colors';
@@ -39,6 +40,7 @@ export const MobileDrawer: React.FC<MobileDrawerProps> = ({
 }) => {
   const slideAnim = useRef(new Animated.Value(-DRAWER_WIDTH)).current;
   const overlayOpacity = useRef(new Animated.Value(0)).current;
+  const [showNotificationsModal, setShowNotificationsModal] = useState(false);
 
   useEffect(() => {
     if (visible) {
@@ -119,21 +121,19 @@ export const MobileDrawer: React.FC<MobileDrawerProps> = ({
           {clientId && onToggleNotifications && typeof onToggleNotifications === 'function' && (
             <TouchableOpacity
               style={styles.menuItem}
-              onPress={async () => {
-                if (onToggleNotifications) {
-                  await onToggleNotifications();
-                }
+              onPress={() => {
+                setShowNotificationsModal(true);
               }}
-              disabled={notificationsUpdating || !onToggleNotifications}
+              disabled={notificationsUpdating}
               activeOpacity={0.7}
             >
               <Ionicons 
-                name={leadsNotificationAllDay ? 'notifications' : 'notifications-outline'} 
+                name="notifications-outline" 
                 size={24} 
                 color="#fff" 
               />
               <Text style={[styles.menuItemText, { color: '#fff' }]}>
-                {notificationsUpdating ? 'Actualizando...' : 'Recibir 24 horas'}
+                Notificaciones
               </Text>
             </TouchableOpacity>
           )}
@@ -150,6 +150,81 @@ export const MobileDrawer: React.FC<MobileDrawerProps> = ({
           </TouchableOpacity>
         </View>
       </Animated.View>
+
+      {/* Modal de configuración de notificaciones */}
+      <Modal
+        visible={showNotificationsModal}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setShowNotificationsModal(false)}
+      >
+        <TouchableOpacity
+          style={styles.notificationsModalOverlay}
+          activeOpacity={1}
+          onPress={() => setShowNotificationsModal(false)}
+        >
+          <TouchableOpacity
+            style={styles.notificationsModalContent}
+            activeOpacity={1}
+            onPress={(e) => e.stopPropagation()}
+          >
+            <View style={styles.notificationsModalHeader}>
+              <Ionicons
+                name={leadsNotificationAllDay ? 'notifications' : 'notifications-off'}
+                size={32}
+                color={colors.primary}
+              />
+              <Text style={styles.notificationsModalTitle}>Notificaciones</Text>
+            </View>
+
+            <View style={styles.notificationsStatusContainer}>
+              <View style={[
+                styles.notificationsStatusBadge,
+                leadsNotificationAllDay ? styles.notificationsStatusActive : styles.notificationsStatusInactive
+              ]}>
+                <Text style={styles.notificationsStatusText}>
+                  {leadsNotificationAllDay ? 'Activado' : 'Desactivado'}
+                </Text>
+              </View>
+            </View>
+
+            <Text style={styles.notificationsModalMessage}>
+              {leadsNotificationAllDay
+                ? 'Actualmente recibes estimados por WhatsApp las 24 horas. Si lo desactivas, los estimados que lleguen durante la noche se guardarán y serán enviados durante la mañana.'
+                : 'Actualmente no recibes estimados durante la noche. Si lo activas, recibirás los estimados inmediatamente, incluso durante la noche.'}
+            </Text>
+
+            <View style={styles.notificationsModalButtons}>
+              <TouchableOpacity
+                style={[styles.notificationsModalButton, styles.notificationsModalButtonCancel]}
+                onPress={() => setShowNotificationsModal(false)}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.notificationsModalButtonCancelText}>Cancelar</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.notificationsModalButton, styles.notificationsModalButtonConfirm]}
+                onPress={async () => {
+                  if (onToggleNotifications) {
+                    await onToggleNotifications();
+                    setShowNotificationsModal(false);
+                  }
+                }}
+                disabled={notificationsUpdating}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.notificationsModalButtonConfirmText}>
+                  {notificationsUpdating 
+                    ? 'Actualizando...' 
+                    : leadsNotificationAllDay 
+                      ? 'Desactivar' 
+                      : 'Activar'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
     </View>
   );
 };
@@ -243,6 +318,90 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#fff',
     flex: 1,
+  },
+  notificationsModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  notificationsModalContent: {
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    padding: 24,
+    width: '100%',
+    maxWidth: 400,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  notificationsModalHeader: {
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  notificationsModalTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: colors.textPrimary,
+    marginTop: 12,
+    textAlign: 'center',
+  },
+  notificationsStatusContainer: {
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  notificationsStatusBadge: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+  },
+  notificationsStatusActive: {
+    backgroundColor: '#10b981',
+  },
+  notificationsStatusInactive: {
+    backgroundColor: '#6b7280',
+  },
+  notificationsStatusText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  notificationsModalMessage: {
+    fontSize: 15,
+    color: colors.textSecondary,
+    lineHeight: 22,
+    marginBottom: 24,
+    textAlign: 'center',
+  },
+  notificationsModalButtons: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  notificationsModalButton: {
+    flex: 1,
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  notificationsModalButtonCancel: {
+    backgroundColor: '#f3f4f6',
+  },
+  notificationsModalButtonConfirm: {
+    backgroundColor: colors.primary,
+  },
+  notificationsModalButtonCancelText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: colors.textSecondary,
+  },
+  notificationsModalButtonConfirmText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#fff',
   },
 });
 
