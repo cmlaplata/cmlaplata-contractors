@@ -2010,6 +2010,7 @@ export const FacebookLeadsList = forwardRef<FacebookLeadsListRef, FacebookLeadsL
 
       <ScrollView 
         style={styles.scrollView} 
+        contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
         refreshControl={
           <RefreshControl
@@ -3285,6 +3286,9 @@ const styles = StyleSheet.create({
   paginationSubtext: {
     fontSize: 12,
     color: colors.textSecondary,
+  },
+  scrollContent: {
+    flexGrow: 1,
   },
   scrollView: {
     flex: 1,
