@@ -4,6 +4,7 @@ import { API_BASE_URL, API_KEY } from './api';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
 
+
 // Detectar si estamos en Expo Go
 const isExpoGo = () => {
   try {
@@ -30,12 +31,6 @@ const axiosInstance = axios.create({
   headers: {
     'Content-Type': 'application/json',
     'x-api-key': API_KEY,
-    // Solo agregar User-Agent de Chrome en desarrollo/Expo Go
-    // Esto evita que el backend bloquee la petición por User-Agent desconocido
-    // En producción (APK compilada) no se agrega para evitar problemas
-    ...(isDevelopmentOrExpoGo() && {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    }),
   },
 });
 
@@ -65,13 +60,23 @@ axiosInstance.interceptors.request.use(
     const isGenerateEmailEndpoint = config.url?.includes('generate-email');
     const isAuthEndpoint = config.url?.includes('/auth/');
     
+    // Detectar si es un endpoint de clients
+    const isClientsEndpoint = config.url?.includes('/clients');
+    
     // Para endpoints de auth, asegurar que NO se agregue Authorization header
     if (isAuthEndpoint) {
       delete config.headers.Authorization;
       console.log('🔐 Endpoint de auth detectado, solo usando x-api-key');
     }
     
-    if (!isSearchEndpoint && !isGenerateEmailEndpoint && !isAuthEndpoint) {
+    // Para endpoints de clients, usar solo x-api-key (sin Authorization header)
+    if (isClientsEndpoint) {
+      delete config.headers.Authorization;
+      console.log('🔑 [axios] Endpoint de clients detectado, usando solo x-api-key:', config.url);
+      return config;
+    }
+    
+    if (!isSearchEndpoint && !isGenerateEmailEndpoint && !isAuthEndpoint && !isClientsEndpoint) {
       // Verificar método de autenticación
       const authMethod = await AsyncStorage.getItem('auth_method');
       
@@ -80,10 +85,46 @@ axiosInstance.interceptors.request.use(
         const apiToken = await AsyncStorage.getItem('api_auth_token');
         if (apiToken) {
           config.headers.Authorization = `Bearer ${apiToken}`;
+          // Log para debugging
+          const inExpoGo = isExpoGo();
+          if (inExpoGo || config.url?.includes('clients')) {
+            console.log('📱 [axios] Token de teléfono agregado:', {
+              url: config.url,
+              tokenLength: apiToken.length,
+              tokenPreview: apiToken.substring(0, 30) + '...',
+              hasToken: !!apiToken,
+            });
+          }
+        } else {
+          console.warn('⚠️ [axios] No hay token de teléfono disponible para:', config.url);
         }
       } else {
         // Si se autenticó con Firebase (email/password), usar token de Firebase
-        const user = auth.currentUser;
+        let user = auth.currentUser;
+        
+        // Si auth.currentUser es null pero el método es firebase, intentar esperar un momento
+        // Esto puede pasar si Firebase aún no ha inicializado completamente
+        if (!user && authMethod === 'firebase') {
+          console.log('⚠️ [axios] auth.currentUser es null, esperando inicialización de Firebase...');
+          // Esperar un momento para que Firebase se inicialice
+          await new Promise(resolve => setTimeout(resolve, 100));
+          user = auth.currentUser;
+          
+          // Si aún es null, intentar obtener el token desde AsyncStorage si existe
+          if (!user) {
+            console.log('⚠️ [axios] auth.currentUser sigue siendo null, verificando token guardado...');
+            // No podemos usar el token guardado directamente porque puede estar expirado
+            // Pero podemos intentar forzar la inicialización de Firebase
+            try {
+              // Esperar un poco más para que Firebase se sincronice
+              await new Promise(resolve => setTimeout(resolve, 200));
+              user = auth.currentUser;
+            } catch (waitError) {
+              console.warn('⚠️ [axios] Error esperando inicialización de Firebase:', waitError);
+            }
+          }
+        }
+        
         if (user) {
           try {
             // Usar token cacheado (false) en lugar de forzar renovación (true)
@@ -147,6 +188,9 @@ axiosInstance.interceptors.request.use(
         } else {
           console.warn('⚠️ [axios] No hay usuario de Firebase para:', config.url);
           console.warn('⚠️ [axios] auth.currentUser es null');
+          console.warn('⚠️ [axios] authMethod:', authMethod);
+          // Si no hay usuario pero el método es firebase, puede ser un problema de sincronización
+          // En este caso, la petición fallará con 403, pero al menos sabemos por qué
         }
       }
     }
@@ -181,12 +225,15 @@ axiosInstance.interceptors.response.use(
     } else if (error.response?.status === 403) {
       // Forbidden - token no autorizado o falta de permisos
       const inExpoGo = isExpoGo();
+      const authMethod = await AsyncStorage.getItem('auth_method');
+      
       console.error('❌ [axios] Error 403: Forbidden');
       console.error('❌ [axios] Platform:', Platform.OS);
       console.error('❌ [axios] Expo Go:', inExpoGo);
       console.error('❌ [axios] URL:', error.config?.url);
       console.error('❌ [axios] BaseURL:', axiosInstance.defaults.baseURL);
       console.error('❌ [axios] Full URL:', `${axiosInstance.defaults.baseURL}${error.config?.url}`);
+      console.error('❌ [axios] Auth Method:', authMethod || 'No definido');
       console.error('❌ [axios] Headers enviados:', {
         'x-api-key': error.config?.headers?.['x-api-key'] ? `Presente (${error.config.headers['x-api-key'].substring(0, 10)}...)` : 'Faltante',
         'Authorization': error.config?.headers?.Authorization ? `Presente (${error.config.headers.Authorization.substring(0, 30)}...)` : 'Faltante',
@@ -199,6 +246,18 @@ axiosInstance.interceptors.response.use(
         baseURL: error.config?.baseURL,
       });
       console.error('❌ [axios] auth.currentUser:', auth.currentUser ? `Sí (${auth.currentUser.uid})` : 'No');
+      
+      // Si es autenticación por teléfono, verificar el token
+      if (authMethod === 'phone') {
+        const apiToken = await AsyncStorage.getItem('api_auth_token');
+        console.error('❌ [axios] Token de teléfono presente:', !!apiToken);
+        if (apiToken) {
+          console.error('❌ [axios] Token length:', apiToken.length);
+          console.error('❌ [axios] Token preview:', apiToken.substring(0, 50) + '...');
+          console.error('⚠️ [axios] El token puede estar expirado o no tener permisos para este endpoint');
+        }
+      }
+      
       console.error('❌ [axios] Response data:', error.response?.data);
       console.error('❌ [axios] Response headers:', error.response?.headers);
     } else {

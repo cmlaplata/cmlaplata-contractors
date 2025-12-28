@@ -155,10 +155,14 @@ const FacebookLeadsListInner = (
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [showTimePicker, setShowTimePicker] = useState(false);
   const [clientStatuses, setClientStatuses] = useState<{ [key: number]: string }>({});
+  const [updatingStatusKey, setUpdatingStatusKey] = useState<string | null>(null); // formato: "leadId-status"
   const [googleMyBusinessModalVisible, setGoogleMyBusinessModalVisible] = useState(false);
   const [reviewConfirmationModalVisible, setReviewConfirmationModalVisible] = useState(false);
   const [reviewConfirmationLeadId, setReviewConfirmationLeadId] = useState<number | null>(null);
   const [showTutorial, setShowTutorial] = useState(false);
+  const [deleteDateTimeModalVisible, setDeleteDateTimeModalVisible] = useState(false);
+  const [deleteDateTimeLead, setDeleteDateTimeLead] = useState<FacebookLead | null>(null);
+  const [deleteDateTimeType, setDeleteDateTimeType] = useState<'appointment' | 'recontact' | null>(null);
   const [specificLead, setSpecificLead] = useState<FacebookLead | null>(null); // Lead específico buscado por filterLeadId
   const animatedHeights = useRef<{ [key: number]: Animated.Value }>({});
   const quickResponseHeights = useRef<{ [key: number]: Animated.Value }>({});
@@ -592,6 +596,17 @@ const FacebookLeadsListInner = (
       stopTutorialAnimation();
     }
     
+    // Cerrar el menú de estado del cliente si está abierto
+    if (expandedClientStatusInfo === leadId && clientStatusInfoHeights.current[leadId]) {
+      Animated.timing(clientStatusInfoHeights.current[leadId], {
+        toValue: 0,
+        duration: 300,
+        useNativeDriver: false,
+      }).start(() => {
+        setExpandedClientStatusInfo(null);
+      });
+    }
+    
     if (expandedLeadId === leadId) {
       // Cerrar submenús primero si están abiertos
       if (expandedQuickResponse === leadId && quickResponseHeights.current[leadId]) {
@@ -627,6 +642,17 @@ const FacebookLeadsListInner = (
         setExpandedLeadId(null);
       }
     } else {
+      // Cerrar el menú de estado del cliente si está abierto (para cualquier lead)
+      if (expandedClientStatusInfo !== null && clientStatusInfoHeights.current[expandedClientStatusInfo]) {
+        Animated.timing(clientStatusInfoHeights.current[expandedClientStatusInfo], {
+          toValue: 0,
+          duration: 300,
+          useNativeDriver: false,
+        }).start(() => {
+          setExpandedClientStatusInfo(null);
+        });
+      }
+      
       // Cerrar el menú anterior si hay uno abierto (incluyendo sus submenús)
       if (expandedLeadId !== null) {
         const previousLeadId = expandedLeadId;
@@ -1269,21 +1295,19 @@ const FacebookLeadsListInner = (
   };
 
   const toggleClientStatusInfo = (leadId: number) => {
-    // Asegurar que el menú principal esté abierto
-    if (expandedLeadId !== leadId) {
-      if (!animatedHeights.current[leadId]) {
-        animatedHeights.current[leadId] = new Animated.Value(0);
-      } else {
-        animatedHeights.current[leadId].setValue(0);
-      }
-      setExpandedLeadId(leadId);
-      requestAnimationFrame(() => {
+    // Cerrar el menú principal si está abierto
+    if (expandedLeadId === leadId) {
+      if (animatedHeights.current[leadId]) {
         Animated.timing(animatedHeights.current[leadId], {
-          toValue: 1,
+          toValue: 0,
           duration: 300,
           useNativeDriver: false,
-        }).start();
-      });
+        }).start(() => {
+          setExpandedLeadId(null);
+        });
+      } else {
+        setExpandedLeadId(null);
+      }
     }
     
     // Inicializar animación si no existe y asegurar que esté en 0
@@ -1424,19 +1448,121 @@ const FacebookLeadsListInner = (
     return mappedStatus;
   };
 
-  const handleClientStatusOption = async (leadId: number, status: string) => {
+  const handleClientStatusOption = async (leadId: number, status: string, lead?: FacebookLead) => {
     console.log('🔵 handleClientStatusOption: Iniciando...');
     console.log('🔵 handleClientStatusOption: leadId:', leadId);
     console.log('🔵 handleClientStatusOption: status:', status);
+    console.log('🔵 handleClientStatusOption: lead recibido:', lead ? JSON.stringify({ id: lead.id, appointmentDate: lead.appointmentDate, appointmentTime: lead.appointmentTime, recontactDate: lead.recontactDate, recontactTime: lead.recontactTime }) : 'undefined');
+    
+    // Setear estado de loading
+    const statusKey = `${leadId}-${status}`;
+    setUpdatingStatusKey(statusKey);
     
     if (status === 'appointment' || status === 'recontact') {
-      console.log('🔵 handleClientStatusOption: Abriendo modal de fecha/hora para:', status);
-      setDateTimeModalType(status === 'appointment' ? 'appointment' : 'recontact');
-      setModalLeadId(leadId);
-      setSelectedDate(new Date());
-      setSelectedTime('');
-      setSendReminder(true); // Resetear a true por defecto
-      setDateTimeModalVisible(true);
+      // Buscar el lead actual si no se pasó como parámetro
+      let currentLead = lead;
+      if (!currentLead) {
+        const allLeads = isSearching ? searchLeads : leads;
+        currentLead = allLeads.find(l => l.id === leadId);
+        console.log('🔵 handleClientStatusOption: Lead buscado en lista:', currentLead ? JSON.stringify({ id: currentLead.id, appointmentDate: currentLead.appointmentDate, appointmentTime: currentLead.appointmentTime, recontactDate: currentLead.recontactDate, recontactTime: currentLead.recontactTime }) : 'no encontrado');
+      }
+      
+      // Verificar si hay valores guardados (no vacíos ni null)
+      const appointmentDateValid = currentLead?.appointmentDate && String(currentLead.appointmentDate).trim() !== '';
+      const appointmentTimeValid = currentLead?.appointmentTime && String(currentLead.appointmentTime).trim() !== '';
+      const recontactDateValid = currentLead?.recontactDate && String(currentLead.recontactDate).trim() !== '';
+      const recontactTimeValid = currentLead?.recontactTime && String(currentLead.recontactTime).trim() !== '';
+      
+      const hasExistingAppointment = status === 'appointment' && appointmentDateValid && appointmentTimeValid;
+      const hasExistingRecontact = status === 'recontact' && recontactDateValid && recontactTimeValid;
+      
+      console.log('🔵 handleClientStatusOption: appointmentDate:', currentLead?.appointmentDate, 'válido:', appointmentDateValid);
+      console.log('🔵 handleClientStatusOption: appointmentTime:', currentLead?.appointmentTime, 'válido:', appointmentTimeValid);
+      console.log('🔵 handleClientStatusOption: recontactDate:', currentLead?.recontactDate, 'válido:', recontactDateValid);
+      console.log('🔵 handleClientStatusOption: recontactTime:', currentLead?.recontactTime, 'válido:', recontactTimeValid);
+      console.log('🔵 handleClientStatusOption: hasExistingAppointment:', hasExistingAppointment);
+      console.log('🔵 handleClientStatusOption: hasExistingRecontact:', hasExistingRecontact);
+      
+      if (hasExistingAppointment || hasExistingRecontact) {
+        // Hay valores guardados, actualizar el estado sin abrir el modal
+        console.log('🔵 handleClientStatusOption: Hay valores guardados, actualizando estado sin modal');
+        console.log('🔵 handleClientStatusOption: Intentando llamar al backend...');
+        Alert.alert('Info', `Se detectaron valores existentes. Actualizando estado a: ${status}`);
+        try {
+          const backendStatus = mapStatusToBackend(status);
+          console.log('🔵 handleClientStatusOption: backendStatus mapeado:', backendStatus);
+          
+          if (!backendStatus || backendStatus === 'undefined') {
+            console.error('❌ handleClientStatusOption: backendStatus es undefined o inválido');
+            Alert.alert('Error', 'No se pudo determinar el estado del cliente');
+            setUpdatingStatusKey(null);
+            return;
+          }
+          
+          console.log('🔵 handleClientStatusOption: === LLAMANDO AL BACKEND ===');
+          console.log('🔵 handleClientStatusOption: leadId:', leadId);
+          console.log('🔵 handleClientStatusOption: backendStatus:', backendStatus);
+          
+          // Actualizar estado sin enviar fecha/hora (se preservarán los valores existentes)
+          const updatedLead = await facebookLeadsService.updateClientStatus(leadId, backendStatus);
+          
+          console.log('✅ handleClientStatusOption: Lead actualizado exitosamente:', updatedLead);
+          
+          // Actualizar estado local
+          setClientStatuses(prev => ({ ...prev, [leadId]: status }));
+          
+          // Refrescar la lista
+          await refetch();
+          
+          // Cerrar menús
+          if (expandedClientStatusInfo === leadId && clientStatusInfoHeights.current[leadId]) {
+            Animated.timing(clientStatusInfoHeights.current[leadId], {
+              toValue: 0,
+              duration: 300,
+              useNativeDriver: false,
+            }).start(() => {
+              setExpandedClientStatusInfo(null);
+            });
+          }
+          closeMenu(leadId);
+          setUpdatingStatusKey(null);
+        } catch (error: any) {
+          console.error('❌ handleClientStatusOption: Error actualizando estado:', error);
+          let errorMessage = 'No se pudo actualizar el estado del cliente';
+          if (error?.response?.data?.message) {
+            const message = error.response.data.message;
+            if (Array.isArray(message)) {
+              errorMessage = message.join(', ');
+            } else if (typeof message === 'string') {
+              errorMessage = message;
+            }
+          } else if (error?.message) {
+            errorMessage = error.message;
+          }
+          Alert.alert('Error', errorMessage);
+          setUpdatingStatusKey(null);
+        }
+      } else {
+        // No hay valores guardados, abrir el modal
+        console.log('🔵 handleClientStatusOption: No hay valores guardados, abriendo modal de fecha/hora para:', status);
+        // Cerrar el menú de info de estado antes de abrir el modal
+        if (expandedClientStatusInfo === leadId && clientStatusInfoHeights.current[leadId]) {
+          Animated.timing(clientStatusInfoHeights.current[leadId], {
+            toValue: 0,
+            duration: 300,
+            useNativeDriver: false,
+          }).start(() => {
+            setExpandedClientStatusInfo(null);
+          });
+        }
+        setDateTimeModalType(status === 'appointment' ? 'appointment' : 'recontact');
+        setModalLeadId(leadId);
+        setSelectedDate(new Date());
+        setSelectedTime('');
+        setSendReminder(true); // Resetear a true por defecto
+        setDateTimeModalVisible(true);
+        setUpdatingStatusKey(null); // Limpiar loading ya que el modal manejará el resto
+      }
     } else {
       try {
         console.log('🔵 handleClientStatusOption: Llamando a updateClientStatus...');
@@ -1451,6 +1577,7 @@ const FacebookLeadsListInner = (
         if (!backendStatus || backendStatus === 'undefined') {
           console.error('❌ handleClientStatusOption: backendStatus es undefined o inválido');
           Alert.alert('Error', 'No se pudo determinar el estado del cliente');
+          setUpdatingStatusKey(null);
           return;
         }
         
@@ -1475,8 +1602,20 @@ const FacebookLeadsListInner = (
           });
         }
         
+        // Cerrar el menú de info de estado (donde están los botones)
+        if (expandedClientStatusInfo === leadId && clientStatusInfoHeights.current[leadId]) {
+          Animated.timing(clientStatusInfoHeights.current[leadId], {
+            toValue: 0,
+            duration: 300,
+            useNativeDriver: false,
+          }).start(() => {
+            setExpandedClientStatusInfo(null);
+          });
+        }
+        
         // Cerrar el menú principal
         closeMenu(leadId);
+        setUpdatingStatusKey(null);
       } catch (error: any) {
         console.error('❌ handleClientStatusOption: Error actualizando estado del cliente:', error);
         console.error('❌ handleClientStatusOption: Error details:', {
@@ -1503,7 +1642,104 @@ const FacebookLeadsListInner = (
           errorMessage,
           [{ text: 'OK' }]
         );
+        // Cerrar el menú de info de estado (donde están los botones) en caso de error
+        if (expandedClientStatusInfo === leadId && clientStatusInfoHeights.current[leadId]) {
+          Animated.timing(clientStatusInfoHeights.current[leadId], {
+            toValue: 0,
+            duration: 300,
+            useNativeDriver: false,
+          }).start(() => {
+            setExpandedClientStatusInfo(null);
+          });
+        }
+        setUpdatingStatusKey(null);
       }
+    }
+  };
+
+  const handleModifyDateTime = (lead: FacebookLead, type: 'appointment' | 'recontact') => {
+    setDateTimeModalType(type);
+    setModalLeadId(lead.id);
+    
+    if (type === 'appointment' && lead.appointmentDate && lead.appointmentTime) {
+      // Pre-llenar con valores existentes
+      const date = new Date(lead.appointmentDate);
+      setSelectedDate(date);
+      const [hours, minutes] = lead.appointmentTime.split(':');
+      setSelectedTime(`${hours}:${minutes}`);
+    } else if (type === 'recontact' && lead.recontactDate && lead.recontactTime) {
+      // Pre-llenar con valores existentes
+      const date = new Date(lead.recontactDate);
+      setSelectedDate(date);
+      const [hours, minutes] = lead.recontactTime.split(':');
+      setSelectedTime(`${hours}:${minutes}`);
+    } else {
+      // Valores por defecto si no hay existentes
+      setSelectedDate(new Date());
+      setSelectedTime('');
+    }
+    
+    setSendReminder(true);
+    setDateTimeModalVisible(true);
+  };
+
+  const handleDeleteDateTime = async (lead: FacebookLead, type: 'appointment' | 'recontact') => {
+    console.log('🗑️🗑️🗑️ handleDeleteDateTime: FUNCIÓN LLAMADA');
+    console.log('🗑️ handleDeleteDateTime: lead.id:', lead?.id);
+    console.log('🗑️ handleDeleteDateTime: type:', type);
+    
+    setDeleteDateTimeLead(lead);
+    setDeleteDateTimeType(type);
+    setDeleteDateTimeModalVisible(true);
+  };
+
+  const confirmDeleteDateTime = async () => {
+    if (!deleteDateTimeLead || !deleteDateTimeType) {
+      console.error('❌ confirmDeleteDateTime: Faltan datos');
+      return;
+    }
+
+    try {
+      const backendStatus = mapStatusToBackend(deleteDateTimeType);
+      const options: any = {};
+      
+      if (deleteDateTimeType === 'appointment') {
+        options.appointmentDate = null;
+        options.appointmentTime = null;
+      } else {
+        options.recontactDate = null;
+        options.recontactTime = null;
+      }
+      
+      console.log('🗑️ confirmDeleteDateTime: Eliminando fecha/hora para:', deleteDateTimeType);
+      console.log('🗑️ confirmDeleteDateTime: lead.id:', deleteDateTimeLead.id);
+      console.log('🗑️ confirmDeleteDateTime: Options:', options);
+      
+      await facebookLeadsService.updateClientStatus(deleteDateTimeLead.id, backendStatus, options);
+      
+      console.log('✅ confirmDeleteDateTime: Fecha/hora eliminada exitosamente');
+      
+      // Cerrar modal
+      setDeleteDateTimeModalVisible(false);
+      setDeleteDateTimeLead(null);
+      setDeleteDateTimeType(null);
+      
+      // Refrescar la lista
+      await refetch();
+    } catch (error: any) {
+      console.error('❌ confirmDeleteDateTime: Error eliminando fecha/hora:', error);
+      let errorMessage = 'No se pudo eliminar la fecha y hora';
+      if (error?.response?.data?.message) {
+        const message = error.response.data.message;
+        if (Array.isArray(message)) {
+          errorMessage = message.join(', ');
+        } else if (typeof message === 'string') {
+          errorMessage = message;
+        }
+      } else if (error?.message) {
+        errorMessage = error.message;
+      }
+      Alert.alert('Error', errorMessage);
     }
   };
 
@@ -1534,13 +1770,14 @@ const FacebookLeadsListInner = (
       console.log('🟢 handleSaveDateTime: dateTimeModalType frontend:', dateTimeModalType);
       console.log('🟢 handleSaveDateTime: status backend:', backendStatus);
       
-      // Formatear fecha y hora a ISO string (formato esperado por el backend)
+      // Formatear fecha y hora
       const [hours, minutes] = selectedTime.split(':').map(Number);
       const dateTime = new Date(selectedDate);
       dateTime.setHours(hours, minutes, 0, 0);
       
-      // Convertir a ISO string (YYYY-MM-DDTHH:mm:ss.sssZ)
+      // Crear ISO string para appointmentDate/recontactDate (el backend espera ISO string)
       const isoString = dateTime.toISOString();
+      // Formatear hora a HH:MM para appointmentTime/recontactTime
       const formattedTime = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
       
       // Preparar opciones según el tipo de estado
@@ -1566,6 +1803,9 @@ const FacebookLeadsListInner = (
       console.log('✅ handleSaveDateTime: clientStatus actualizado:', updatedLead.clientStatus);
       console.log('✅ handleSaveDateTime: appointmentDate:', updatedLead.appointmentDate);
       console.log('✅ handleSaveDateTime: appointmentTime:', updatedLead.appointmentTime);
+      console.log('✅ handleSaveDateTime: recontactDate:', updatedLead.recontactDate);
+      console.log('✅ handleSaveDateTime: recontactTime:', updatedLead.recontactTime);
+      console.log('✅ handleSaveDateTime: LLAMANDO REFETCH...');
       
       // Actualizar estado local
       setClientStatuses(prev => ({ ...prev, [modalLeadId]: dateTimeModalType }));
@@ -1573,6 +1813,7 @@ const FacebookLeadsListInner = (
       
       // Refrescar la lista de leads para obtener los datos actualizados (appointmentDate, appointmentTime, etc.)
       await refetch();
+      console.log('✅ handleSaveDateTime: REFETCH COMPLETADO');
       
       // Cerrar el modal automáticamente
       setDateTimeModalVisible(false);
@@ -2086,7 +2327,7 @@ const FacebookLeadsListInner = (
             // Altura base: solo la fila de solicitar review y editar
             // Cada menuItem tiene paddingVertical: 12 (arriba y abajo = 24) + altura del contenido (~20) = ~44px
             const menuItemHeight = 44; // paddingVertical 12*2 + contenido ~20
-            const baseHeight = menuItemHeight + 20; // Altura del botón + espacio extra para que se vea completo
+            const baseHeight = menuItemHeight + 35; // Altura del botón + espacio extra para que se vea completo (aumentado para evitar corte)
             
             // Altura del menú de respuestas rápidas cuando está expandido
             const quickResponseExpandedHeight = 200; // Altura para 3 botones (Email, SMS, Llamada) + gaps
@@ -2106,18 +2347,13 @@ const FacebookLeadsListInner = (
               outputRange: [0, clientStatusExpandedHeight],
             });
             
-            const clientStatusInfoCurrentHeight = clientStatusInfoHeights.current[lead.id].interpolate({
-              inputRange: [0, 1],
-              outputRange: [0, clientStatusInfoExpandedHeight],
-            });
-            
             // Altura del menú base (sin menús expandibles)
             const baseMenuHeight = animatedHeights.current[lead.id].interpolate({
               inputRange: [0, 1],
               outputRange: [0, baseHeight],
             });
             
-            // Altura total: base + respuestas rápidas + estado del cliente + opciones de estado info
+            // Altura total: base + respuestas rápidas + estado del cliente (sin incluir el menú de estado info que es independiente)
             const menuHeight = Animated.add(
               baseMenuHeight,
               Animated.add(
@@ -2125,15 +2361,9 @@ const FacebookLeadsListInner = (
                   animatedHeights.current[lead.id],
                   quickResponseCurrentHeight
                 ),
-                Animated.add(
-                  Animated.multiply(
-                    animatedHeights.current[lead.id],
-                    clientStatusCurrentHeight
-                  ),
-                  Animated.multiply(
-                    animatedHeights.current[lead.id],
-                    clientStatusInfoCurrentHeight
-                  )
+                Animated.multiply(
+                  animatedHeights.current[lead.id],
+                  clientStatusCurrentHeight
                 )
               )
             );
@@ -2390,6 +2620,7 @@ const FacebookLeadsListInner = (
                     const statusColor = getStatusColor(currentStatus);
                     const statusLabel = currentStatus ? getStatusLabel(currentStatus) : 'Estado del cliente';
                     const buttonText = currentStatus ? statusLabel : 'Estado del cliente';
+                    const isUpdatingThisLead = updatingStatusKey?.startsWith(`${lead.id}-`);
                     
                     return (
                       <TouchableOpacity
@@ -2403,12 +2634,17 @@ const FacebookLeadsListInner = (
                         ]}
                         onPress={() => toggleClientStatusInfo(lead.id)}
                         activeOpacity={0.7}
+                        disabled={isUpdatingThisLead}
                       >
-                        <Ionicons 
-                          name="checkmark-circle-outline" 
-                          size={20} 
-                          color={currentStatus ? '#fff' : colors.primary} 
-                        />
+                        {isUpdatingThisLead ? (
+                          <ActivityIndicator size="small" color={currentStatus ? '#fff' : colors.primary} />
+                        ) : (
+                          <Ionicons 
+                            name="checkmark-circle-outline" 
+                            size={20} 
+                            color={currentStatus ? '#fff' : colors.primary} 
+                          />
+                        )}
                         <Text style={[
                           styles.actionButtonText,
                           { color: currentStatus ? '#fff' : colors.textPrimary }
@@ -2444,7 +2680,24 @@ const FacebookLeadsListInner = (
                     // Verificar cita agendada
                     if (currentStatus === 'appointment' && lead.appointmentDate && lead.appointmentTime) {
                       try {
-                        const date = new Date(lead.appointmentDate);
+                        // Parsear fecha manualmente para evitar problemas de zona horaria
+                        let date: Date;
+                        if (typeof lead.appointmentDate === 'string') {
+                          // Si viene como string "YYYY-MM-DD" o ISO string
+                          if (lead.appointmentDate.includes('T')) {
+                            // Es ISO string completo
+                            date = new Date(lead.appointmentDate);
+                          } else {
+                            // Es solo fecha "YYYY-MM-DD", parsear manualmente
+                            const [year, month, day] = lead.appointmentDate.split('-').map(Number);
+                            date = new Date(year, month - 1, day);
+                          }
+                        } else if (lead.appointmentDate instanceof Date) {
+                          date = lead.appointmentDate;
+                        } else {
+                          date = new Date(lead.appointmentDate);
+                        }
+                        
                         const formattedDate = date.toLocaleDateString('es-ES', { 
                           day: '2-digit', 
                           month: '2-digit', 
@@ -2458,25 +2711,130 @@ const FacebookLeadsListInner = (
                     // Verificar fecha de recontacto (verificar independientemente)
                     if (currentStatus === 'recontact' && lead.recontactDate && lead.recontactTime) {
                       try {
-                        const date = new Date(lead.recontactDate);
+                        console.log('📅 RENDER - lead.id:', lead.id);
+                        console.log('📅 RENDER - lead.recontactDate RAW:', lead.recontactDate);
+                        console.log('📅 RENDER - lead.recontactTime RAW:', lead.recontactTime);
+                        
+                        // Parsear fecha manualmente para evitar problemas de zona horaria
+                        let date: Date;
+                        if (typeof lead.recontactDate === 'string') {
+                          // Si viene como string "YYYY-MM-DD" o ISO string
+                          if (lead.recontactDate.includes('T')) {
+                            // Es ISO string completo
+                            date = new Date(lead.recontactDate);
+                          } else {
+                            // Es solo fecha "YYYY-MM-DD", parsear manualmente
+                            const [year, month, day] = lead.recontactDate.split('-').map(Number);
+                            date = new Date(year, month - 1, day);
+                          }
+                        } else if (lead.recontactDate instanceof Date) {
+                          date = lead.recontactDate;
+                        } else {
+                          date = new Date(lead.recontactDate);
+                        }
+                        
+                        console.log('📅 RENDER - date parseado:', date);
                         const formattedDate = date.toLocaleDateString('es-ES', { 
                           day: '2-digit', 
                           month: '2-digit', 
                           year: 'numeric' 
                         });
+                        console.log('📅 RENDER - formattedDate:', formattedDate);
                         dateTimeText = `Fecha de recontacto: ${formattedDate} a las ${lead.recontactTime}`;
                       } catch (e) {
                         console.error('Error formateando fecha de recontacto:', e);
                       }
                     }
                     
+                    const isAppointment = currentStatus === 'appointment';
+                    const isRecontact = currentStatus === 'recontact';
+                    
                     if (dateTimeText && expandedClientStatusInfo !== lead.id) {
+                      // Hay fecha/hora establecida - mostrar info y botones de modificar/eliminar
                       return (
-                        <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 8, gap: 6 }}>
-                          <Ionicons name="calendar-outline" size={16} color={colors.textPrimary} />
-                          <Text style={[styles.infoText, { fontSize: 14, color: colors.textPrimary }]}>
-                            {dateTimeText}
-                          </Text>
+                        <View style={{ marginTop: 8 }}>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+                            <Ionicons name="calendar-outline" size={16} color={colors.textPrimary} />
+                            <Text style={[styles.infoText, { fontSize: 14, color: colors.textPrimary, flex: 1 }]}>
+                              {dateTimeText}
+                            </Text>
+                          </View>
+                          {(isAppointment || isRecontact) && (
+                            <View style={{ flexDirection: 'row', gap: 8 }}>
+                              <TouchableOpacity
+                                onPress={() => handleModifyDateTime(lead, isAppointment ? 'appointment' : 'recontact')}
+                                style={{
+                                  flex: 4,
+                                  flexDirection: 'row',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  gap: 6,
+                                  paddingVertical: 8,
+                                  paddingHorizontal: 12,
+                                  backgroundColor: colors.backgroundTertiary,
+                                  borderRadius: 8,
+                                  borderWidth: 1,
+                                  borderColor: colors.border,
+                                }}
+                                activeOpacity={0.7}
+                              >
+                                <Ionicons name="create-outline" size={16} color={colors.primary} />
+                                <Text style={{ fontSize: 13, color: colors.primary, fontWeight: '500' }}>
+                                  Modificar
+                                </Text>
+                              </TouchableOpacity>
+                              <TouchableOpacity
+                                onPress={() => {
+                                  console.log('🔴🔴🔴 BOTÓN ELIMINAR PRESIONADO');
+                                  console.log('🔴 lead.id:', lead.id);
+                                  console.log('🔴 isAppointment:', isAppointment);
+                                  console.log('🔴 isRecontact:', isRecontact);
+                                  handleDeleteDateTime(lead, isAppointment ? 'appointment' : 'recontact');
+                                }}
+                                style={{
+                                  flex: 1,
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  paddingVertical: 8,
+                                  paddingHorizontal: 12,
+                                  backgroundColor: colors.primary + '15',
+                                  borderRadius: 8,
+                                  borderWidth: 1,
+                                  borderColor: colors.primary + '30',
+                                }}
+                                activeOpacity={0.7}
+                              >
+                                <Ionicons name="trash-outline" size={18} color={colors.primary} />
+                              </TouchableOpacity>
+                            </View>
+                          )}
+                        </View>
+                      );
+                    } else if ((isAppointment || isRecontact) && !dateTimeText && expandedClientStatusInfo !== lead.id) {
+                      // No hay fecha/hora pero el estado es cita agendada o por recontactar - mostrar botón para establecer
+                      return (
+                        <View style={{ marginTop: 8 }}>
+                          <TouchableOpacity
+                            onPress={() => handleModifyDateTime(lead, isAppointment ? 'appointment' : 'recontact')}
+                            style={{
+                              flexDirection: 'row',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              gap: 6,
+                              paddingVertical: 8,
+                              paddingHorizontal: 12,
+                              backgroundColor: colors.backgroundTertiary,
+                              borderRadius: 8,
+                              borderWidth: 1,
+                              borderColor: colors.border,
+                            }}
+                            activeOpacity={0.7}
+                          >
+                            <Ionicons name="calendar-outline" size={16} color={colors.primary} />
+                            <Text style={{ fontSize: 13, color: colors.primary, fontWeight: '500' }}>
+                              Establecer fecha y hora
+                            </Text>
+                          </TouchableOpacity>
                         </View>
                       );
                     }
@@ -2570,84 +2928,6 @@ const FacebookLeadsListInner = (
                     }
                     return null;
                   })()}
-                  {(() => {
-                    if (!clientStatusInfoHeights.current[lead.id]) {
-                      clientStatusInfoHeights.current[lead.id] = new Animated.Value(0);
-                    }
-                    
-                    const statusOpacity = clientStatusInfoHeights.current[lead.id].interpolate({
-                      inputRange: [0, 1],
-                      outputRange: [0, 1],
-                    });
-                    
-                    // Calcular altura dinámicamente basada en el número de opciones
-                    // Hay 5 opciones totales, pero se filtra la actual, quedan máximo 4
-                    // Cada menuItem tiene ~44px (paddingVertical 12*2 + contenido ~20)
-                    // gap entre items es 8px (definido en quickResponseContent)
-                    // 4 opciones * 44px = 176px + 3 gaps * 8px = 24px = 200px
-                    // Agregamos un poco más de espacio para que se vea mejor
-                    const maxOptions = 4; // Máximo de opciones que se pueden mostrar
-                    const menuItemHeight = 44;
-                    const gapSize = 8;
-                    const calculatedHeight = (maxOptions * menuItemHeight) + ((maxOptions - 1) * gapSize) + 16; // +16px extra
-                    
-                    const statusHeight = clientStatusInfoHeights.current[lead.id].interpolate({
-                      inputRange: [0, 1],
-                      outputRange: [0, calculatedHeight],
-                    });
-                    
-                    return (
-                      <Animated.View 
-                        style={{ 
-                          height: statusHeight, 
-                          opacity: statusOpacity,
-                          overflow: 'hidden',
-                          marginTop: 8,
-                        }}
-                      >
-                        <View style={styles.quickResponseContent}>
-                          {(() => {
-                            const currentStatus = clientStatuses[lead.id] || (lead.clientStatus ? (() => {
-                              const backendToFrontend: { [key: string]: string } = {
-                                'No contestó': 'no-contest',
-                                'Cita Agendada': 'appointment',
-                                'Cita agendada': 'appointment',
-                                'Por recontactar': 'recontact',
-                                'Estimado vendido': 'estimated-sold',
-                                'Trabajo terminado': 'work-completed',
-                              };
-                              return backendToFrontend[lead.clientStatus] || lead.clientStatus;
-                            })() : 'appointment');
-                            
-                            const statusOptions = [
-                              { key: 'no-contest', label: 'No contestó', style: styles.statusButtonNoContest },
-                              { key: 'appointment', label: 'Cita agendada', style: styles.statusButtonAppointment },
-                              { key: 'recontact', label: 'Por recontactar', style: styles.statusButtonRecontact },
-                              { key: 'estimated-sold', label: 'Estimado vendido', style: styles.statusButtonEstimatedSold },
-                              { key: 'work-completed', label: 'Trabajo terminado', style: styles.statusButtonWorkCompleted },
-                            ];
-                            
-                            // Filtrar el estado actual
-                            const filteredOptions = statusOptions.filter(option => option.key !== currentStatus);
-                            
-                            return filteredOptions.map((option) => (
-                              <TouchableOpacity
-                                key={option.key}
-                                style={[styles.menuItem, option.style]}
-                                onPress={() => {
-                                  handleClientStatusOption(lead.id, option.key);
-                                  toggleClientStatusInfo(lead.id);
-                                }}
-                                activeOpacity={0.7}
-                              >
-                                <Text style={styles.statusText}>{option.label}</Text>
-                              </TouchableOpacity>
-                            ));
-                          })()}
-                        </View>
-                      </Animated.View>
-                    );
-                  })()}
                     <View style={styles.twoButtonsRow}>
                       <TouchableOpacity
                         style={[styles.menuItem, styles.reviewButton]}
@@ -2678,6 +2958,86 @@ const FacebookLeadsListInner = (
                     </View>
                   </View>
                 </Animated.View>
+                
+                {/* Menú de estado del cliente (independiente del menú principal) */}
+                {(() => {
+                  if (!clientStatusInfoHeights.current[lead.id]) {
+                    clientStatusInfoHeights.current[lead.id] = new Animated.Value(0);
+                  }
+                  
+                  const statusOpacity = clientStatusInfoHeights.current[lead.id].interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [0, 1],
+                  });
+                  
+                  // Calcular altura dinámicamente basada en el número de opciones
+                  // Hay 5 opciones totales, pero se filtra la actual, quedan máximo 4
+                  // Cada menuItem tiene ~44px (paddingVertical 12*2 + contenido ~20)
+                  // gap entre items es 8px (definido en quickResponseContent)
+                  // 4 opciones * 44px = 176px + 3 gaps * 8px = 24px = 200px
+                  // Agregamos un poco más de espacio para que se vea mejor
+                  const maxOptions = 4; // Máximo de opciones que se pueden mostrar
+                  const menuItemHeight = 44;
+                  const gapSize = 8;
+                  const calculatedHeight = (maxOptions * menuItemHeight) + ((maxOptions - 1) * gapSize) + 16; // +16px extra
+                  
+                  const statusHeight = clientStatusInfoHeights.current[lead.id].interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [0, calculatedHeight],
+                  });
+                  
+                  return (
+                    <Animated.View 
+                      style={{ 
+                        height: statusHeight, 
+                        opacity: statusOpacity,
+                        overflow: 'hidden',
+                        marginTop: 8,
+                      }}
+                    >
+                      <View style={styles.quickResponseContent}>
+                        {(() => {
+                          const currentStatus = clientStatuses[lead.id] || (lead.clientStatus ? (() => {
+                            const backendToFrontend: { [key: string]: string } = {
+                              'No contestó': 'no-contest',
+                              'Cita Agendada': 'appointment',
+                              'Cita agendada': 'appointment',
+                              'Por recontactar': 'recontact',
+                              'Estimado vendido': 'estimated-sold',
+                              'Trabajo terminado': 'work-completed',
+                            };
+                            return backendToFrontend[lead.clientStatus] || lead.clientStatus;
+                          })() : 'appointment');
+                          
+                          const statusOptions = [
+                            { key: 'no-contest', label: 'No contestó', style: styles.statusButtonNoContest },
+                            { key: 'appointment', label: 'Cita agendada', style: styles.statusButtonAppointment },
+                            { key: 'recontact', label: 'Por recontactar', style: styles.statusButtonRecontact },
+                            { key: 'estimated-sold', label: 'Estimado vendido', style: styles.statusButtonEstimatedSold },
+                            { key: 'work-completed', label: 'Trabajo terminado', style: styles.statusButtonWorkCompleted },
+                          ];
+                          
+                          // Filtrar el estado actual
+                          const filteredOptions = statusOptions.filter(option => option.key !== currentStatus);
+                          
+                          return filteredOptions.map((option) => (
+                            <TouchableOpacity
+                              key={option.key}
+                              style={[styles.menuItem, option.style]}
+                              onPress={() => {
+                                handleClientStatusOption(lead.id, option.key, lead);
+                                toggleClientStatusInfo(lead.id);
+                              }}
+                              activeOpacity={0.7}
+                            >
+                              <Text style={styles.statusText}>{option.label}</Text>
+                            </TouchableOpacity>
+                          ));
+                        })()}
+                      </View>
+                    </Animated.View>
+                  );
+                })()}
               </View>
             );
           })
@@ -3022,6 +3382,65 @@ const FacebookLeadsListInner = (
                   <Text style={styles.modalActionButtonText}>{savingDateTime ? 'Guardando...' : 'Guardar'}</Text>
                 </TouchableOpacity>
               </View>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Modal de confirmación para eliminar fecha/hora */}
+      <Modal
+        visible={deleteDateTimeModalVisible}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => {
+          setDeleteDateTimeModalVisible(false);
+          setDeleteDateTimeLead(null);
+          setDeleteDateTimeType(null);
+        }}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContainer}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Eliminar fecha y hora</Text>
+              <TouchableOpacity 
+                onPress={() => {
+                  setDeleteDateTimeModalVisible(false);
+                  setDeleteDateTimeLead(null);
+                  setDeleteDateTimeType(null);
+                }} 
+                style={styles.modalCloseButton}
+              >
+                <Ionicons name="close-outline" size={24} color={colors.textPrimary} />
+              </TouchableOpacity>
+            </View>
+            
+            <View style={styles.modalContent}>
+              <Text style={styles.modalText}>
+                ¿Estás seguro de que quieres eliminar la fecha y hora de {deleteDateTimeType === 'appointment' ? 'cita agendada' : 'recontacto'}?
+              </Text>
+            </View>
+
+            <View style={[styles.modalActions, { flexDirection: 'row', gap: 12 }]}>
+              <TouchableOpacity
+                style={[styles.modalActionButton, styles.closeButton, { width: '40%' }]}
+                onPress={() => {
+                  setDeleteDateTimeModalVisible(false);
+                  setDeleteDateTimeLead(null);
+                  setDeleteDateTimeType(null);
+                }}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.modalActionButtonText}>Cancelar</Text>
+              </TouchableOpacity>
+              
+              <TouchableOpacity
+                style={[styles.modalActionButton, { backgroundColor: colors.primary, width: '60%' }]}
+                onPress={confirmDeleteDateTime}
+                activeOpacity={0.7}
+              >
+                <Ionicons name="trash-outline" size={20} color="#fff" />
+                <Text style={styles.modalActionButtonText}>Eliminar</Text>
+              </TouchableOpacity>
             </View>
           </View>
         </View>

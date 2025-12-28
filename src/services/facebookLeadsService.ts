@@ -278,17 +278,17 @@ export const facebookLeadsService = {
     
     const body: any = { clientStatus: cleanStatus };
     
-    // Agregar campos de fecha y hora si están presentes
-    if (options?.appointmentDate) {
+    // Agregar campos de fecha y hora si están presentes (incluyendo null para eliminar)
+    if (options?.appointmentDate !== undefined) {
       body.appointmentDate = options.appointmentDate;
     }
-    if (options?.appointmentTime) {
+    if (options?.appointmentTime !== undefined) {
       body.appointmentTime = options.appointmentTime;
     }
-    if (options?.recontactDate) {
+    if (options?.recontactDate !== undefined) {
       body.recontactDate = options.recontactDate;
     }
-    if (options?.recontactTime) {
+    if (options?.recontactTime !== undefined) {
       body.recontactTime = options.recontactTime;
     }
     if (options?.sendReminder !== undefined) {

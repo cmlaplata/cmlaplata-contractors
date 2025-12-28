@@ -24,6 +24,25 @@ export const useFacebookLeads = ({ clientId, page = 1, limit = 50 }: UseFacebook
       setLoading(true);
       setError(null);
       const response = await facebookLeadsService.findByClient(clientId, currentPage, limit);
+      // Log para debug: verificar campos de fecha/hora en la respuesta
+      console.log('📥📥📥 useFacebookLeads: Leads recibidos:', response.data.length);
+      if (response.data.length > 0) {
+        // Buscar leads con recontactDate para debug
+        const leadsWithRecontact = response.data.filter((lead: FacebookLead) => lead.recontactDate);
+        console.log('📥 useFacebookLeads: Leads con recontactDate:', leadsWithRecontact.length);
+        leadsWithRecontact.forEach((lead: FacebookLead) => {
+          console.log(`📥 useFacebookLeads: Lead ID ${lead.id}:`, {
+            id: lead.id,
+            name: lead.name,
+            clientStatus: lead.clientStatus,
+            recontactDate: lead.recontactDate,
+            recontactDate_type: typeof lead.recontactDate,
+            recontactTime: lead.recontactTime,
+            recontactTime_type: typeof lead.recontactTime,
+            recontactDate_raw: JSON.stringify(lead.recontactDate),
+          });
+        });
+      }
       setLeads(response.data);
       setPagination(response.pagination);
     } catch (err: any) {

@@ -1,5 +1,4 @@
 import axiosInstance from '../config/axios';
-import { API_BASE_URL } from '../config/api';
 
 export interface Client {
   id: number;
@@ -22,7 +21,8 @@ export interface UpdateClientDto {
 export const clientService = {
   // Obtener cliente por ID
   getById: async (clientId: number): Promise<Client> => {
-    const url = `${API_BASE_URL}/clients/${clientId}`;
+    // Usar URL relativa porque axios ya tiene baseURL configurado
+    const url = `/clients/${clientId}`;
     console.log('📡 clientService.getById:', url);
     console.log('📡 clientService.getById: clientId:', clientId);
     
@@ -57,7 +57,8 @@ export const clientService = {
 
   // Actualizar cliente
   update: async (clientId: number, data: UpdateClientDto): Promise<Client> => {
-    const url = `${API_BASE_URL}/clients/${clientId}`;
+    // Usar URL relativa porque axios ya tiene baseURL configurado
+    const url = `/clients/${clientId}`;
     console.log('📡 clientService.update:', url);
     console.log('📡 clientService.update: clientId:', clientId);
     console.log('📡 clientService.update: data:', data);
