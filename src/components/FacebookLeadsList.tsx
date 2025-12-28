@@ -31,8 +31,10 @@ export interface FacebookLeadsListRef {
   openLeadById: (leadId: number) => void;
 }
 
-export const FacebookLeadsList = forwardRef<FacebookLeadsListRef, FacebookLeadsListProps>(
-  ({ onEdit, onNew, filterLeadId }, ref) => {
+const FacebookLeadsListInner = (
+  { onEdit, onNew, filterLeadId }: FacebookLeadsListProps, 
+  ref: React.ForwardedRef<FacebookLeadsListRef>
+) => {
   // Control para mostrar/ocultar logs de debug
   const SHOW_DEBUG_LOGS = false;
   
@@ -135,7 +137,6 @@ export const FacebookLeadsList = forwardRef<FacebookLeadsListRef, FacebookLeadsL
   const [generatingSMS, setGeneratingSMS] = useState<number | null>(null);
   const [generatingCall, setGeneratingCall] = useState<number | null>(null);
   const [requestingReview, setRequestingReview] = useState<number | null>(null);
-  const [checkingClientStatus, setCheckingClientStatus] = useState<number | null>(null);
   const [modalVisible, setModalVisible] = useState(false);
   const [modalContent, setModalContent] = useState<string>('');
   const [modalType, setModalType] = useState<'email' | 'sms' | 'call'>('email');
@@ -147,6 +148,9 @@ export const FacebookLeadsList = forwardRef<FacebookLeadsListRef, FacebookLeadsL
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
   const [selectedTime, setSelectedTime] = useState<string>('');
   const [sendReminder, setSendReminder] = useState<boolean>(true);
+  const [savingDateTime, setSavingDateTime] = useState(false);
+  const [dateInputFocused, setDateInputFocused] = useState(false);
+  const [timeInputFocused, setTimeInputFocused] = useState(false);
   const [expandedClientStatusInfo, setExpandedClientStatusInfo] = useState<number | null>(null);
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [showTimePicker, setShowTimePicker] = useState(false);
@@ -1265,6 +1269,23 @@ export const FacebookLeadsList = forwardRef<FacebookLeadsListRef, FacebookLeadsL
   };
 
   const toggleClientStatusInfo = (leadId: number) => {
+    // Asegurar que el menú principal esté abierto
+    if (expandedLeadId !== leadId) {
+      if (!animatedHeights.current[leadId]) {
+        animatedHeights.current[leadId] = new Animated.Value(0);
+      } else {
+        animatedHeights.current[leadId].setValue(0);
+      }
+      setExpandedLeadId(leadId);
+      requestAnimationFrame(() => {
+        Animated.timing(animatedHeights.current[leadId], {
+          toValue: 1,
+          duration: 300,
+          useNativeDriver: false,
+        }).start();
+      });
+    }
+    
     // Inicializar animación si no existe y asegurar que esté en 0
     if (!clientStatusInfoHeights.current[leadId]) {
       clientStatusInfoHeights.current[leadId] = new Animated.Value(0);
@@ -1486,65 +1507,6 @@ export const FacebookLeadsList = forwardRef<FacebookLeadsListRef, FacebookLeadsL
     }
   };
 
-  // Función para enviar recordatorio de prueba
-  const handleTestReminder = async (leadId: number) => {
-    try {
-      const lead = displayLeads.find(l => l.id === leadId);
-      if (!lead) {
-        Alert.alert('Error', 'No se encontró el lead');
-        return;
-      }
-
-      // Determinar el tipo de recordatorio y fecha/hora
-      let reminderType: 'Cita Agendada' | 'Por recontactar';
-      let appointmentDate: string;
-      let appointmentTime: string;
-
-      if (lead.clientStatus === 'Cita Agendada' || lead.clientStatus === 'Cita agendada') {
-        reminderType = 'Cita Agendada';
-        if (!lead.appointmentDate || !lead.appointmentTime) {
-          Alert.alert('Error', 'Este lead no tiene fecha y hora de cita agendada');
-          return;
-        }
-        // Convertir appointmentDate (ISO string) a YYYY-MM-DD
-        const date = new Date(lead.appointmentDate);
-        appointmentDate = date.toISOString().split('T')[0];
-        appointmentTime = lead.appointmentTime;
-      } else if (lead.clientStatus === 'Por recontactar') {
-        reminderType = 'Por recontactar';
-        if (!lead.recontactDate || !lead.recontactTime) {
-          Alert.alert('Error', 'Este lead no tiene fecha y hora de recontacto');
-          return;
-        }
-        // Convertir recontactDate (ISO string) a YYYY-MM-DD
-        const date = new Date(lead.recontactDate);
-        appointmentDate = date.toISOString().split('T')[0];
-        appointmentTime = lead.recontactTime;
-      } else {
-        Alert.alert('Error', 'Este lead no tiene un estado válido para recordatorio');
-        return;
-      }
-
-      // Crear recordatorio de prueba
-      const response = await facebookLeadsService.createTestReminder(leadId, {
-        appointmentDate,
-        appointmentTime,
-        reminderType
-      });
-
-      // Enviar el recordatorio inmediatamente
-      await facebookLeadsService.sendReminder(response.id);
-
-      Alert.alert('✅ Éxito', 'Recordatorio de prueba enviado');
-    } catch (error: any) {
-      console.error('Error al enviar recordatorio de prueba:', error);
-      Alert.alert(
-        'Error',
-        error?.response?.data?.message || error?.message || 'No se pudo enviar el recordatorio de prueba'
-      );
-    }
-  };
-
   const handleSaveDateTime = async () => {
     console.log('🟢 handleSaveDateTime: Iniciando...');
     console.log('🟢 handleSaveDateTime: selectedTime:', selectedTime);
@@ -1554,7 +1516,7 @@ export const FacebookLeadsList = forwardRef<FacebookLeadsListRef, FacebookLeadsL
     
     if (!selectedTime) {
       console.warn('⚠️ handleSaveDateTime: No hay hora seleccionada');
-      Alert.alert('Error', 'Por favor selecciona una hora');
+      Alert.alert('Hora requerida', 'Por favor selecciona una hora para continuar');
       return;
     }
     
@@ -1564,6 +1526,7 @@ export const FacebookLeadsList = forwardRef<FacebookLeadsListRef, FacebookLeadsL
       return;
     }
 
+    setSavingDateTime(true);
     try {
       console.log('🟢 handleSaveDateTime: Llamando a updateClientStatus...');
       // Mapear el código del frontend al valor que espera el backend
@@ -1632,7 +1595,10 @@ export const FacebookLeadsList = forwardRef<FacebookLeadsListRef, FacebookLeadsL
       if (modalLeadId) {
         closeMenu(modalLeadId);
       }
+      
+      setSavingDateTime(false);
     } catch (error: any) {
+      setSavingDateTime(false);
       console.error('❌ handleSaveDateTime: Error guardando fecha y hora:', error);
       console.error('❌ handleSaveDateTime: Error details:', {
         message: error?.message,
@@ -2111,6 +2077,9 @@ export const FacebookLeadsList = forwardRef<FacebookLeadsListRef, FacebookLeadsL
             if (!clientStatusHeights.current[lead.id]) {
               clientStatusHeights.current[lead.id] = new Animated.Value(0);
             }
+            if (!clientStatusInfoHeights.current[lead.id]) {
+              clientStatusInfoHeights.current[lead.id] = new Animated.Value(0);
+            }
             
             const isQuickExpanded = expandedQuickResponse === lead.id;
             const isClientStatusExpanded = expandedClientStatus === lead.id;
@@ -2123,6 +2092,8 @@ export const FacebookLeadsList = forwardRef<FacebookLeadsListRef, FacebookLeadsL
             const quickResponseExpandedHeight = 200; // Altura para 3 botones (Email, SMS, Llamada) + gaps
             // Altura del menú de estado del cliente cuando está expandido
             const clientStatusExpandedHeight = 300; // Altura para 5 opciones + gaps
+            // Altura del menú de opciones de estado (el nuevo)
+            const clientStatusInfoExpandedHeight = 250; // Altura para 4-5 opciones de estado
             
             // Calcular altura total dinámicamente
             const quickResponseCurrentHeight = quickResponseHeights.current[lead.id].interpolate({
@@ -2135,13 +2106,18 @@ export const FacebookLeadsList = forwardRef<FacebookLeadsListRef, FacebookLeadsL
               outputRange: [0, clientStatusExpandedHeight],
             });
             
+            const clientStatusInfoCurrentHeight = clientStatusInfoHeights.current[lead.id].interpolate({
+              inputRange: [0, 1],
+              outputRange: [0, clientStatusInfoExpandedHeight],
+            });
+            
             // Altura del menú base (sin menús expandibles)
             const baseMenuHeight = animatedHeights.current[lead.id].interpolate({
               inputRange: [0, 1],
               outputRange: [0, baseHeight],
             });
             
-            // Altura total: base + respuestas rápidas + estado del cliente (solo si el menú principal está abierto)
+            // Altura total: base + respuestas rápidas + estado del cliente + opciones de estado info
             const menuHeight = Animated.add(
               baseMenuHeight,
               Animated.add(
@@ -2149,9 +2125,15 @@ export const FacebookLeadsList = forwardRef<FacebookLeadsListRef, FacebookLeadsL
                   animatedHeights.current[lead.id],
                   quickResponseCurrentHeight
                 ),
-                Animated.multiply(
-                  animatedHeights.current[lead.id],
-                  clientStatusCurrentHeight
+                Animated.add(
+                  Animated.multiply(
+                    animatedHeights.current[lead.id],
+                    clientStatusCurrentHeight
+                  ),
+                  Animated.multiply(
+                    animatedHeights.current[lead.id],
+                    clientStatusInfoCurrentHeight
+                  )
                 )
               )
             );
@@ -2339,15 +2321,6 @@ export const FacebookLeadsList = forwardRef<FacebookLeadsListRef, FacebookLeadsL
                     </TouchableOpacity>
                   </View>
                 </View>
-                {/* Botón de testeo temporal para recordatorio - TEMPORAL PARA TESTING */}
-                <TouchableOpacity
-                  style={[styles.actionButton, styles.testButton]}
-                  onPress={() => handleTestReminder(lead.id)}
-                  activeOpacity={0.7}
-                >
-                  <Ionicons name="flash-outline" size={20} color={colors.warning} />
-                  <Text style={[styles.actionButtonText, { color: colors.warning }]}>Test Recordatorio</Text>
-                </TouchableOpacity>
                 <View style={styles.actionButtonsRow}>
                   <TouchableOpacity
                     style={[styles.actionButton, styles.callButton]}
@@ -2450,6 +2423,94 @@ export const FacebookLeadsList = forwardRef<FacebookLeadsListRef, FacebookLeadsL
                       </TouchableOpacity>
                     );
                   })()}
+                  {/* Mostrar fecha y hora si hay cita agendada o por recontactar */}
+                  {(() => {
+                    const currentStatus = clientStatuses[lead.id] || (lead.clientStatus ? (() => {
+                      const backendToFrontend: { [key: string]: string } = {
+                        'No contestó': 'no-contest',
+                        'No contesto': 'no-contest',
+                        'Cita Agendada': 'appointment',
+                        'Cita agendada': 'appointment',
+                        'Por recontactar': 'recontact',
+                        'Por Recontactar': 'recontact',
+                        'Estimado vendido': 'estimated-sold',
+                        'Trabajo terminado': 'work-completed',
+                      };
+                      return backendToFrontend[lead.clientStatus] || lead.clientStatus;
+                    })() : null);
+                    
+                    // Verificar si hay fecha y hora para mostrar
+                    let dateTimeText = null;
+                    // Verificar cita agendada
+                    if (currentStatus === 'appointment' && lead.appointmentDate && lead.appointmentTime) {
+                      try {
+                        const date = new Date(lead.appointmentDate);
+                        const formattedDate = date.toLocaleDateString('es-ES', { 
+                          day: '2-digit', 
+                          month: '2-digit', 
+                          year: 'numeric' 
+                        });
+                        dateTimeText = `Fecha de la cita: ${formattedDate} a las ${lead.appointmentTime}`;
+                      } catch (e) {
+                        console.error('Error formateando fecha de cita:', e);
+                      }
+                    }
+                    // Verificar fecha de recontacto (verificar independientemente)
+                    if (currentStatus === 'recontact' && lead.recontactDate && lead.recontactTime) {
+                      try {
+                        const date = new Date(lead.recontactDate);
+                        const formattedDate = date.toLocaleDateString('es-ES', { 
+                          day: '2-digit', 
+                          month: '2-digit', 
+                          year: 'numeric' 
+                        });
+                        dateTimeText = `Fecha de recontacto: ${formattedDate} a las ${lead.recontactTime}`;
+                      } catch (e) {
+                        console.error('Error formateando fecha de recontacto:', e);
+                      }
+                    }
+                    
+                    if (dateTimeText && expandedClientStatusInfo !== lead.id) {
+                      return (
+                        <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 8, gap: 6 }}>
+                          <Ionicons name="calendar-outline" size={16} color={colors.textPrimary} />
+                          <Text style={[styles.infoText, { fontSize: 14, color: colors.textPrimary }]}>
+                            {dateTimeText}
+                          </Text>
+                        </View>
+                      );
+                    }
+                    return null;
+                  })()}
+                </View>
+                {/* Menú desplegable animado */}
+                <Animated.View 
+                  style={[
+                    styles.expandedMenu, 
+                    { 
+                      height: menuHeight, 
+                      opacity: animatedHeights.current[lead.id],
+                      overflow: 'hidden',
+                    }
+                  ]}
+                >
+                  <View style={styles.menuContent}>
+                    {false && (
+                      <TouchableOpacity
+                        style={[styles.quickResponseButton, { opacity: 0, height: 0, overflow: 'hidden', pointerEvents: 'none' as const }]}
+                        onPress={() => {
+                          toggleQuickResponse(lead.id);
+                        }}
+                        activeOpacity={0.7}
+                      >
+                        <Text style={styles.quickResponseButtonText}>Respuestas rápidas en inglés</Text>
+                        <Ionicons 
+                          name={expandedQuickResponse === lead.id ? "chevron-up-outline" : "chevron-down-outline"} 
+                          size={18} 
+                          color={colors.primary} 
+                        />
+                      </TouchableOpacity>
+                    )}
                   {/* Mostrar fecha y hora si hay cita agendada o por recontactar */}
                   {(() => {
                     // Ocultar si el botón está expandido
@@ -2587,116 +2648,6 @@ export const FacebookLeadsList = forwardRef<FacebookLeadsListRef, FacebookLeadsL
                       </Animated.View>
                     );
                   })()}
-                </View>
-                {/* Menú desplegable animado */}
-                <Animated.View 
-                  style={[
-                    styles.expandedMenu, 
-                    { 
-                      height: menuHeight, 
-                      opacity: animatedHeights.current[lead.id],
-                      overflow: 'hidden',
-                    }
-                  ]}
-                >
-                  <View style={styles.menuContent}>
-                    {false && (
-                      <TouchableOpacity
-                        style={[styles.quickResponseButton, { opacity: 0, height: 0, overflow: 'hidden', pointerEvents: 'none' as const }]}
-                        onPress={() => {
-                          toggleQuickResponse(lead.id);
-                        }}
-                        activeOpacity={0.7}
-                      >
-                        <Text style={styles.quickResponseButtonText}>Respuestas rápidas en inglés</Text>
-                        <Ionicons 
-                          name={expandedQuickResponse === lead.id ? "chevron-up-outline" : "chevron-down-outline"} 
-                          size={18} 
-                          color="#fff" 
-                        />
-                      </TouchableOpacity>
-                    )}
-                    {(() => {
-                      const quickOpacity = quickResponseHeights.current[lead.id].interpolate({
-                        inputRange: [0, 1],
-                        outputRange: [0, 1],
-                      });
-                      
-                      const quickHeight = Animated.multiply(
-                        animatedHeights.current[lead.id],
-                        quickResponseHeights.current[lead.id].interpolate({
-                          inputRange: [0, 1],
-                          outputRange: [0, 200],
-                        })
-                      );
-                      
-                      return (
-                        <Animated.View 
-                          style={{ 
-                            height: 0, 
-                            opacity: 0,
-                            overflow: 'hidden',
-                          }}
-                        >
-                          <View style={styles.quickResponseContent}>
-                            <TouchableOpacity
-                              style={styles.menuItem}
-                              onPress={() => handleGenerateEmail(lead.id, 'ingles')}
-                              disabled={generatingEmail === lead.id}
-                              activeOpacity={0.7}
-                            >
-                              {generatingEmail === lead.id ? (
-                                <ActivityIndicator size="small" color={colors.primary} />
-                              ) : (
-                                <Ionicons name="mail-outline" size={20} color={colors.primary} />
-                              )}
-                              <Text style={styles.menuItemText}>Email</Text>
-                            </TouchableOpacity>
-                            {user?.userClientData?.country === 'Argentina' ? (
-                              <TouchableOpacity
-                                style={styles.menuItem}
-                                onPress={() => {
-                                  handleSendWhatsApp(lead.phone || lead.phoneManual || lead.phoneAuto || '');
-                                  closeMenu(lead.id);
-                                }}
-                                disabled={!lead.phone && !lead.phoneManual && !lead.phoneAuto}
-                                activeOpacity={0.7}
-                              >
-                                <Ionicons name="logo-whatsapp" size={20} color={colors.primary} />
-                                <Text style={styles.menuItemText}>Whats</Text>
-                              </TouchableOpacity>
-                            ) : (
-                              <TouchableOpacity
-                                style={styles.menuItem}
-                                onPress={() => handleText(lead.id)}
-                                disabled={generatingSMS === lead.id}
-                                activeOpacity={0.7}
-                              >
-                                {generatingSMS === lead.id ? (
-                                  <ActivityIndicator size="small" color={colors.primary} />
-                                ) : (
-                                  <Ionicons name="chatbubble-outline" size={20} color={colors.primary} />
-                                )}
-                                <Text style={styles.menuItemText}>SMS</Text>
-                              </TouchableOpacity>
-                            )}
-                            <TouchableOpacity
-                              style={styles.menuItem}
-                              onPress={() => handleCall(lead.id)}
-                              disabled={generatingCall === lead.id}
-                              activeOpacity={0.7}
-                            >
-                              {generatingCall === lead.id ? (
-                                <ActivityIndicator size="small" color={colors.primary} />
-                              ) : (
-                                <Ionicons name="call-outline" size={20} color={colors.primary} />
-                              )}
-                              <Text style={styles.menuItemText}>Llamada</Text>
-                            </TouchableOpacity>
-                          </View>
-                        </Animated.View>
-                      );
-                    })()}
                     <View style={styles.twoButtonsRow}>
                       <TouchableOpacity
                         style={[styles.menuItem, styles.reviewButton]}
@@ -2904,68 +2855,118 @@ export const FacebookLeadsList = forwardRef<FacebookLeadsListRef, FacebookLeadsL
             <View style={styles.modalContent}>
               <View style={styles.dateTimeInputContainer}>
                 <Text style={styles.dateTimeLabel}>Fecha:</Text>
-                <TouchableOpacity
-                  style={styles.dateTimeButton}
-                  onPress={() => setShowDatePicker(true)}
-                  activeOpacity={0.7}
-                >
-                  <Ionicons name="calendar-outline" size={20} color={colors.primary} />
-                  <Text style={styles.dateTimeButtonText}>
-                    {selectedDate.toLocaleDateString('es-AR', {
-                      day: '2-digit',
-                      month: '2-digit',
-                      year: 'numeric',
-                    })}
-                  </Text>
-                </TouchableOpacity>
-                {showDatePicker && (
-                  <DateTimePicker
-                    value={selectedDate}
-                    mode="date"
-                    display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                    onChange={(event: any, date?: Date) => {
-                      setShowDatePicker(Platform.OS === 'ios');
-                      if (date) {
-                        setSelectedDate(date);
+                {Platform.OS === 'web' ? (
+                  <input
+                    type="date"
+                    value={selectedDate.toISOString().split('T')[0]}
+                    min={new Date().toISOString().split('T')[0]}
+                    onChange={(e: any) => {
+                      const dateValue = e.target.value;
+                      if (dateValue) {
+                        setSelectedDate(new Date(dateValue));
                       }
                     }}
-                    minimumDate={new Date()}
+                    onFocus={() => setDateInputFocused(true)}
+                    onBlur={() => setDateInputFocused(false)}
+                    style={{
+                      ...styles.webDateInput,
+                      ...(dateInputFocused && {
+                        borderColor: colors.primary,
+                        borderWidth: 2,
+                      }),
+                    } as any}
                   />
+                ) : (
+                  <>
+                    <TouchableOpacity
+                      style={styles.dateTimeButton}
+                      onPress={() => setShowDatePicker(true)}
+                      activeOpacity={0.7}
+                    >
+                      <Ionicons name="calendar-outline" size={20} color={colors.primary} />
+                      <Text style={styles.dateTimeButtonText}>
+                        {selectedDate.toLocaleDateString('es-AR', {
+                          day: '2-digit',
+                          month: '2-digit',
+                          year: 'numeric',
+                        })}
+                      </Text>
+                    </TouchableOpacity>
+                    {showDatePicker && (
+                      <DateTimePicker
+                        value={selectedDate}
+                        mode="date"
+                        display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                        onChange={(event: any, date?: Date) => {
+                          setShowDatePicker(Platform.OS === 'ios');
+                          if (date) {
+                            setSelectedDate(date);
+                          }
+                        }}
+                        minimumDate={new Date()}
+                      />
+                    )}
+                  </>
                 )}
               </View>
               
               <View style={styles.dateTimeInputContainer}>
                 <Text style={styles.dateTimeLabel}>Hora:</Text>
-                <TouchableOpacity
-                  style={styles.dateTimeButton}
-                  onPress={() => setShowTimePicker(true)}
-                  activeOpacity={0.7}
-                >
-                  <Ionicons name="time-outline" size={20} color={colors.primary} />
-                  <Text style={styles.dateTimeButtonText}>
-                    {selectedTime || 'Seleccionar hora'}
-                  </Text>
-                </TouchableOpacity>
-                {showTimePicker && (
-                  <DateTimePicker
-                    value={selectedTime ? (() => {
-                      const [hours, minutes] = selectedTime.split(':');
-                      const time = new Date();
-                      time.setHours(parseInt(hours || '0', 10));
-                      time.setMinutes(parseInt(minutes || '0', 10));
-                      return time;
-                    })() : new Date()}
-                    mode="time"
-                    display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                    onChange={(event: any, time?: Date) => {
-                      setShowTimePicker(Platform.OS === 'ios');
-                      if (time) {
-                        const hours = time.getHours().toString().padStart(2, '0');
-                        const minutes = time.getMinutes().toString().padStart(2, '0');
-                        setSelectedTime(`${hours}:${minutes}`);
+                {Platform.OS === 'web' ? (
+                  <input
+                    type="time"
+                    value={selectedTime}
+                    onChange={(e: any) => {
+                      const timeValue = e.target.value;
+                      if (timeValue) {
+                        setSelectedTime(timeValue);
                       }
                     }}
+                    onFocus={() => setTimeInputFocused(true)}
+                    onBlur={() => setTimeInputFocused(false)}
+                    style={{
+                      ...styles.webTimeInput,
+                      ...(timeInputFocused && {
+                        borderColor: colors.primary,
+                        borderWidth: 2,
+                      }),
+                    } as any}
+                    required
                   />
+                ) : (
+                  <>
+                    <TouchableOpacity
+                      style={styles.dateTimeButton}
+                      onPress={() => setShowTimePicker(true)}
+                      activeOpacity={0.7}
+                    >
+                      <Ionicons name="time-outline" size={20} color={colors.primary} />
+                      <Text style={styles.dateTimeButtonText}>
+                        {selectedTime || 'Seleccionar hora'}
+                      </Text>
+                    </TouchableOpacity>
+                    {showTimePicker && (
+                      <DateTimePicker
+                        value={selectedTime ? (() => {
+                          const [hours, minutes] = selectedTime.split(':');
+                          const time = new Date();
+                          time.setHours(parseInt(hours || '0', 10));
+                          time.setMinutes(parseInt(minutes || '0', 10));
+                          return time;
+                        })() : new Date()}
+                        mode="time"
+                        display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                        onChange={(event: any, time?: Date) => {
+                          setShowTimePicker(Platform.OS === 'ios');
+                          if (time) {
+                            const hours = time.getHours().toString().padStart(2, '0');
+                            const minutes = time.getMinutes().toString().padStart(2, '0');
+                            setSelectedTime(`${hours}:${minutes}`);
+                          }
+                        }}
+                      />
+                    )}
+                  </>
                 )}
               </View>
               
@@ -3008,23 +3009,19 @@ export const FacebookLeadsList = forwardRef<FacebookLeadsListRef, FacebookLeadsL
                 </TouchableOpacity>
                 
                 <TouchableOpacity
-                  style={[styles.modalActionButton, styles.copyButton, styles.halfWidthButton]}
+                  style={[styles.modalActionButton, styles.copyButton, styles.halfWidthButton, !selectedTime && { opacity: 0.5 }]}
                   onPress={handleSaveDateTime}
+                  disabled={savingDateTime || !selectedTime}
                   activeOpacity={0.7}
                 >
-                  <Ionicons name="checkmark-outline" size={20} color="#fff" />
-                  <Text style={styles.modalActionButtonText}>Guardar</Text>
+                  {savingDateTime ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <Ionicons name="checkmark-outline" size={20} color="#fff" />
+                  )}
+                  <Text style={styles.modalActionButtonText}>{savingDateTime ? 'Guardando...' : 'Guardar'}</Text>
                 </TouchableOpacity>
               </View>
-              
-              <TouchableOpacity
-                style={[styles.modalActionButton, styles.sendButton, styles.fullWidthButton]}
-                onPress={handleSaveWithoutDate}
-                activeOpacity={0.7}
-              >
-                <Ionicons name="checkmark-outline" size={20} color="#fff" />
-                <Text style={styles.modalActionButtonText}>Guardar sin fecha</Text>
-              </TouchableOpacity>
             </View>
           </View>
         </View>
@@ -3149,7 +3146,9 @@ export const FacebookLeadsList = forwardRef<FacebookLeadsListRef, FacebookLeadsL
 
     </View>
   );
-});
+};
+
+export const FacebookLeadsList = forwardRef(FacebookLeadsListInner);
 
 const styles = StyleSheet.create({
   container: {
@@ -3721,6 +3720,60 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
     flex: 1,
   },
+  webDateInput: {
+    backgroundColor: colors.backgroundTertiary,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 8,
+    minHeight: 52,
+    fontSize: 15,
+    fontWeight: '400',
+    color: colors.textPrimary,
+    width: '100%',
+    ...(Platform.OS === 'web' && {
+      outline: 'none',
+      cursor: 'pointer',
+      fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
+      transition: 'border-color 0.15s ease',
+      boxSizing: 'border-box',
+      WebkitAppearance: 'none',
+      MozAppearance: 'textfield',
+      boxShadow: 'none',
+      borderStyle: 'solid',
+      padding: '14px 20px',
+      paddingLeft: '20px',
+      paddingRight: '20px',
+      paddingTop: '14px',
+      paddingBottom: '14px',
+    }),
+  } as any,
+  webTimeInput: {
+    backgroundColor: colors.backgroundTertiary,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 8,
+    minHeight: 52,
+    fontSize: 15,
+    fontWeight: '400',
+    color: colors.textPrimary,
+    width: '100%',
+    ...(Platform.OS === 'web' && {
+      outline: 'none',
+      cursor: 'pointer',
+      fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
+      transition: 'border-color 0.15s ease',
+      boxSizing: 'border-box',
+      WebkitAppearance: 'none',
+      MozAppearance: 'textfield',
+      boxShadow: 'none',
+      borderStyle: 'solid',
+      padding: '14px 20px',
+      paddingLeft: '20px',
+      paddingRight: '20px',
+      paddingTop: '14px',
+      paddingBottom: '14px',
+    }),
+  } as any,
   reminderCheckboxContainer: {
     marginTop: 20,
     marginBottom: 8,
@@ -3756,13 +3809,6 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
     marginLeft: 36,
     marginTop: -6,
-  },
-  testButton: {
-    backgroundColor: colors.warning + '20',
-    borderWidth: 1,
-    borderColor: colors.warning,
-    marginBottom: 8,
-    width: '100%',
   },
   statusText: {
     fontSize: 14,

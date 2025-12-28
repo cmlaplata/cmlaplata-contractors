@@ -21,8 +21,3 @@ cmlaplata1u7a
 
 Autorizacion de Facebook lead:
 Todo lo que refiere a esta app usa el endpoint fijo
-
------
-
-Deep links 
-4. Ejemplos de links:
