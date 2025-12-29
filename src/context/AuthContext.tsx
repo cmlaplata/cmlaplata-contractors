@@ -55,9 +55,22 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       
       if (storedUser) {
         const parsedUser = JSON.parse(storedUser) as User;
-        console.log('💾 Usuario restaurado desde almacenamiento local');
-        setUser(parsedUser); // <--- ESTO RESTAURA LA SESIÓN EN REACT
-        return true; // Indicamos que tuvimos éxito
+        
+        // Si el usuario tiene clientId pero no userClientData, refrescar los datos
+        if (parsedUser.clientId && !parsedUser.userClientData) {
+          try {
+            const clientUrl = `${API_BASE_URL}/clients/get/client/${parsedUser.clientId}`;
+            const clientResponse = await axiosInstance.get(clientUrl);
+            // response.data puede ser un array o un objeto, extraer el primer elemento si es array
+            parsedUser.userClientData = Array.isArray(clientResponse.data) ? clientResponse.data[0] : clientResponse.data;
+          } catch (error) {
+            // Si falla, continuar sin userClientData
+            parsedUser.userClientData = null;
+          }
+        }
+        
+        setUser(parsedUser);
+        return true;
       }
     } catch (error) {
       console.error('❌ Error restaurando usuario local:', error);
@@ -169,42 +182,16 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             // Si el usuario tiene clientId, obtener los datos del cliente
             if (userData.clientId) {
               try {
-                console.log('📡 Obteniendo datos del cliente...');
                 const clientUrl = `${API_BASE_URL}/clients/get/client/${userData.clientId}`;
-                console.log('🌐 Consultando cliente:', clientUrl);
-                
                 const clientResponse = await axiosInstance.get(clientUrl);
                 
-                console.log('✅ Datos del cliente obtenidos:', {
-                  status: clientResponse.status,
-                  data: clientResponse.data,
-                });
-                
-                // Agregar los datos del cliente al objeto user
-                // Si la respuesta es un array, tomar el primer elemento; si es un objeto, usarlo directamente
-                const clientData = Array.isArray(clientResponse.data) 
-                  ? clientResponse.data[0] 
-                  : clientResponse.data;
-                
-                userData.userClientData = clientData;
-                
-                console.log('📋 USUARIO CON DATOS DEL CLIENTE:', {
-                  userId: userData.id,
-                  clientId: userData.clientId,
-                  userClientData: userData.userClientData,
-                });
+                // response.data puede ser un array o un objeto, extraer el primer elemento si es array
+                userData.userClientData = Array.isArray(clientResponse.data) ? clientResponse.data[0] : clientResponse.data;
               } catch (clientError: any) {
-                console.warn('⚠️ Error obteniendo datos del cliente:', {
-                  code: clientError.code,
-                  message: clientError.message,
-                  response: clientError.response?.data,
-                  status: clientError.response?.status,
-                });
                 // Continuar sin los datos del cliente si hay error
                 userData.userClientData = null;
               }
             } else {
-              console.log('ℹ️ Usuario sin clientId, no se obtienen datos del cliente');
               userData.userClientData = null;
             }
 
@@ -417,40 +404,29 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   const refreshUserClientData = async () => {
     if (!user?.clientId) {
-      console.log('⚠️ No hay clientId para refrescar datos del cliente');
       return;
     }
 
     try {
-      console.log('🔄 Refrescando datos del cliente...');
       const clientUrl = `${API_BASE_URL}/clients/get/client/${user.clientId}`;
-      console.log('🌐 Consultando cliente:', clientUrl);
-      
       const clientResponse = await axiosInstance.get(clientUrl);
       
-      console.log('✅ Datos del cliente refrescados:', {
-        status: clientResponse.status,
-        data: clientResponse.data,
-      });
-      
-      // Agregar los datos del cliente al objeto user
-      const clientData = Array.isArray(clientResponse.data) 
-        ? clientResponse.data[0] 
-        : clientResponse.data;
+      // response.data puede ser un array o un objeto, extraer el primer elemento si es array
+      const updatedClientData = Array.isArray(clientResponse.data) ? clientResponse.data[0] : clientResponse.data;
       
       // Actualizar el estado del usuario con los nuevos datos del cliente
       setUser(prevUser => {
         if (!prevUser) return null;
         return {
           ...prevUser,
-          userClientData: clientData,
+          userClientData: updatedClientData,
         };
       });
       
       // Guardar usuario actualizado en AsyncStorage (después de actualizar el estado)
       const updatedUser = {
         ...user!,
-        userClientData: clientData,
+        userClientData: updatedClientData,
       };
       
       try {
@@ -467,12 +443,6 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       } catch (saveError) {
         console.warn('⚠️ Error guardando usuario actualizado:', saveError);
       }
-      
-      console.log('📋 USUARIO ACTUALIZADO CON NUEVOS DATOS DEL CLIENTE:', {
-        userId: user.id,
-        clientId: user.clientId,
-        urlgooglemybusiness: clientData?.urlgooglemybusiness,
-      });
     } catch (clientError: any) {
       console.warn('⚠️ Error refrescando datos del cliente:', {
         code: clientError.code,

@@ -84,6 +84,38 @@ const FacebookLeadsListInner = (
 
   const { user, loading: authLoading, refreshUserClientData } = useAuth();
   
+  // Console log para userClientData - diagnóstico completo
+  useEffect(() => {
+    console.log('📋 ========== DIAGNÓSTICO userClientData ==========');
+    console.log('📋 user existe?', !!user);
+    console.log('📋 user.clientId:', user?.clientId);
+    console.log('📋 user.userClientData:', user?.userClientData);
+    console.log('📋 user.userClientData es null?', user?.userClientData === null);
+    console.log('📋 user.userClientData es undefined?', user?.userClientData === undefined);
+    
+    if (user) {
+      console.log('📋 Todos los campos del user:', Object.keys(user));
+      console.log('📋 user completo:', JSON.stringify(user, null, 2));
+    }
+    
+    if (user?.userClientData) {
+      console.log('📋 userClientData.country:', user.userClientData.country);
+      console.log('📋 userClientData.country tipo:', typeof user.userClientData.country);
+      console.log('📋 Comparación country === "Argentina":', user.userClientData.country === 'Argentina');
+      console.log('📋 Comparación country.toLowerCase().trim() === "argentina":', user.userClientData.country?.toLowerCase().trim() === 'argentina');
+      console.log('📋 userClientData completo:', JSON.stringify(user.userClientData, null, 2));
+    } else {
+      console.log('📋 ⚠️ userClientData es null o undefined');
+      console.log('📋 ⚠️ user.clientId:', user?.clientId);
+      if (user?.clientId) {
+        console.log('📋 ⚠️ El usuario tiene clientId pero no userClientData - puede haber un error al cargar');
+      } else {
+        console.log('📋 ⚠️ El usuario NO tiene clientId');
+      }
+    }
+    console.log('📋 ================================================');
+  }, [user, user?.userClientData]);
+  
   // Console log para ver la información del usuario en este componente
   useEffect(() => {
     if (user) {
@@ -135,6 +167,7 @@ const FacebookLeadsListInner = (
   const [expandedClientStatus, setExpandedClientStatus] = useState<number | null>(null);
   const [generatingEmail, setGeneratingEmail] = useState<number | null>(null);
   const [generatingSMS, setGeneratingSMS] = useState<number | null>(null);
+  const [generatingWhatsApp, setGeneratingWhatsApp] = useState<number | null>(null);
   const [generatingCall, setGeneratingCall] = useState<number | null>(null);
   const [requestingReview, setRequestingReview] = useState<number | null>(null);
   const [modalVisible, setModalVisible] = useState(false);
@@ -941,58 +974,61 @@ const FacebookLeadsListInner = (
     }
   };
 
-  const handleSendWhatsApp = (phoneNumber: string) => {
-    if (!phoneNumber) {
-      Alert.alert('Error', 'Este lead no tiene un número de teléfono');
-      return;
-    }
-
-    // Limpiar el número de teléfono (quitar espacios, guiones, paréntesis, etc.)
-    let cleanPhone = phoneNumber.replace(/[\s\-\(\)]/g, '');
-    
-    // Si el número ya tiene código de país (empieza con +), mantenerlo
-    // Si no tiene código de país, agregar +54 para Argentina
-    if (!cleanPhone.startsWith('+')) {
-      // Si empieza con 54, agregar el +
-      if (cleanPhone.startsWith('54')) {
-        cleanPhone = `+${cleanPhone}`;
-      } else {
-        // Si no tiene código de país, agregar +54
-        cleanPhone = `+54${cleanPhone}`;
+  const handleSendWhatsApp = async (leadId: number) => {
+    try {
+      setGeneratingWhatsApp(leadId);
+      
+      // Determinar idioma según el país del cliente
+      const language = user?.userClientData?.country?.toLowerCase().trim() === 'argentina' ? 'español' : 'ingles';
+      
+      // Verificar cache primero
+      const cachedContent = await getCachedContent(leadId, 'sms', language);
+      if (cachedContent) {
+        console.log('✅ Usando contenido del cache para WhatsApp');
+        showContentModal(cachedContent, 'sms', language, leadId);
+        setGeneratingWhatsApp(null);
+        return;
       }
+      
+      // Si no hay cache, generar nuevo contenido
+      console.log('🔄 Generando nuevo contenido de WhatsApp...');
+      const result = await facebookLeadsService.generateContent(leadId, 'sms', language);
+      
+      // Guardar en cache
+      await setCachedContent(leadId, 'sms', language, result.content);
+      
+      showContentModal(result.content, 'sms', language, leadId);
+    } catch (error: any) {
+      Alert.alert('Error', error.response?.data?.message || error.message || 'No se pudo generar el mensaje de WhatsApp');
+    } finally {
+      setGeneratingWhatsApp(null);
     }
-    
-    // Remover el + para la URL de WhatsApp (wa.me no necesita el +)
-    const whatsappPhone = cleanPhone.replace(/\+/g, '');
-    const whatsappUrl = `https://wa.me/${whatsappPhone}`;
-
-    Linking.openURL(whatsappUrl).catch((err) => {
-      Alert.alert('Error', 'No se pudo abrir WhatsApp');
-      console.error('Error al abrir WhatsApp:', err);
-    });
   };
 
   const handleSendEmail = async (leadId: number) => {
     try {
       setGeneratingEmail(leadId);
       
+      // Determinar idioma según el país del cliente
+      const language = user?.userClientData?.country?.toLowerCase().trim() === 'argentina' ? 'español' : 'ingles';
+      
       // Verificar cache primero
-      const cachedContent = await getCachedContent(leadId, 'email', 'ingles');
+      const cachedContent = await getCachedContent(leadId, 'email', language);
       if (cachedContent) {
         console.log('✅ Usando contenido del cache para email');
-        showContentModal(cachedContent, 'email', 'ingles', leadId);
+        showContentModal(cachedContent, 'email', language, leadId);
         setGeneratingEmail(null);
         return;
       }
       
       // Si no hay cache, generar nuevo contenido
       console.log('🔄 Generando nuevo contenido de email...');
-      const result = await facebookLeadsService.generateContent(leadId, 'email', 'ingles');
+      const result = await facebookLeadsService.generateContent(leadId, 'email', language);
       
       // Guardar en cache
-      await setCachedContent(leadId, 'email', 'ingles', result.content);
+      await setCachedContent(leadId, 'email', language, result.content);
       
-      showContentModal(result.content, 'email', 'ingles', leadId);
+      showContentModal(result.content, 'email', language, leadId);
     } catch (error: any) {
       Alert.alert('Error', error.response?.data?.message || error.message || 'No se pudo generar el email');
     } finally {
@@ -1145,6 +1181,51 @@ const FacebookLeadsListInner = (
     Linking.openURL(emailUrl).catch((err) => {
       Alert.alert('Error', 'No se pudo abrir la aplicación de email');
       console.error('Error al abrir email:', err);
+    });
+  };
+
+  const handleSendWhatsAppFromModal = () => {
+    if (!modalLeadId) {
+      Alert.alert('Error', 'No se pudo identificar el lead');
+      return;
+    }
+
+    // Buscar el lead en la lista
+    const lead = displayLeads.find(l => l.id === modalLeadId);
+    if (!lead) {
+      Alert.alert('Error', 'No se encontró el lead');
+      return;
+    }
+
+    const phone = lead.phone || lead.phoneManual || lead.phoneAuto;
+    if (!phone) {
+      Alert.alert('Error', 'Este lead no tiene un número de teléfono');
+      return;
+    }
+
+    // Limpiar el número de teléfono
+    let cleanPhone = phone.replace(/[\s\-\(\)]/g, '');
+    
+    // Si el número ya tiene código de país (empieza con +), mantenerlo
+    // Si no tiene código de país, agregar +54 para Argentina
+    if (!cleanPhone.startsWith('+')) {
+      if (cleanPhone.startsWith('54')) {
+        cleanPhone = `+${cleanPhone}`;
+      } else {
+        cleanPhone = `+54${cleanPhone}`;
+      }
+    }
+    
+    // Remover el + para la URL de WhatsApp (wa.me no necesita el +)
+    const whatsappPhone = cleanPhone.replace(/\+/g, '');
+    
+    // Codificar el mensaje para la URL de WhatsApp
+    const encodedMessage = encodeURIComponent(modalContent);
+    const whatsappUrl = `https://wa.me/${whatsappPhone}?text=${encodedMessage}`;
+
+    Linking.openURL(whatsappUrl).catch((err) => {
+      Alert.alert('Error', 'No se pudo abrir WhatsApp');
+      console.error('Error al abrir WhatsApp:', err);
     });
   };
 
@@ -1700,22 +1781,14 @@ const FacebookLeadsListInner = (
     }
 
     try {
-      const backendStatus = mapStatusToBackend(deleteDateTimeType);
-      const options: any = {};
-      
-      if (deleteDateTimeType === 'appointment') {
-        options.appointmentDate = null;
-        options.appointmentTime = null;
-      } else {
-        options.recontactDate = null;
-        options.recontactTime = null;
-      }
-      
       console.log('🗑️ confirmDeleteDateTime: Eliminando fecha/hora para:', deleteDateTimeType);
       console.log('🗑️ confirmDeleteDateTime: lead.id:', deleteDateTimeLead.id);
-      console.log('🗑️ confirmDeleteDateTime: Options:', options);
       
-      await facebookLeadsService.updateClientStatus(deleteDateTimeLead.id, backendStatus, options);
+      if (deleteDateTimeType === 'appointment') {
+        await facebookLeadsService.deleteAppointmentDate(deleteDateTimeLead.id);
+      } else {
+        await facebookLeadsService.deleteRecontactDate(deleteDateTimeLead.id);
+      }
       
       console.log('✅ confirmDeleteDateTime: Fecha/hora eliminada exitosamente');
       
@@ -2095,7 +2168,7 @@ const FacebookLeadsListInner = (
             {...(Platform.OS === 'android' && { includeFontPadding: false })}
             {...(Platform.OS === 'web' && { 
               // @ts-ignore - web only property
-              outlineStyle: 'none',
+              // outlineStyle removed - not supported in React Native
             })}
           />
           {searchQuery.length > 0 && (
@@ -2561,14 +2634,18 @@ const FacebookLeadsListInner = (
                     <Ionicons name="call-outline" size={20} color={colors.primary} />
                     <Text style={styles.actionButtonText}>Llamar</Text>
                   </TouchableOpacity>
-                  {user?.userClientData?.country === 'Argentina' ? (
+                  {user?.userClientData?.country?.toLowerCase().trim() === 'argentina' ? (
                     <TouchableOpacity
                       style={[styles.actionButton, styles.smsButton]}
-                      onPress={() => handleSendWhatsApp(lead.phone || lead.phoneManual || lead.phoneAuto || '')}
-                      disabled={!lead.phone && !lead.phoneManual && !lead.phoneAuto}
+                      onPress={() => handleSendWhatsApp(lead.id)}
+                      disabled={generatingWhatsApp === lead.id || (!lead.phone && !lead.phoneManual && !lead.phoneAuto)}
                       activeOpacity={0.7}
                     >
-                      <Ionicons name="logo-whatsapp" size={20} color={colors.primary} />
+                      {generatingWhatsApp === lead.id ? (
+                        <ActivityIndicator size="small" color={colors.primary} />
+                      ) : (
+                        <Ionicons name="logo-whatsapp" size={20} color={colors.primary} />
+                      )}
                       <Text style={styles.actionButtonText}>Whats</Text>
                     </TouchableOpacity>
                   ) : (
@@ -2588,7 +2665,7 @@ const FacebookLeadsListInner = (
                   )}
                   <TouchableOpacity
                     style={[styles.actionButton, styles.emailButton]}
-                    onPress={() => handleGenerateEmail(lead.id, 'ingles')}
+                    onPress={() => handleSendEmail(lead.id)}
                     disabled={generatingEmail === lead.id}
                     activeOpacity={0.7}
                   >
@@ -3117,7 +3194,11 @@ const FacebookLeadsListInner = (
           <View style={styles.modalContainer}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>
-                {modalType === 'email' ? 'Email' : modalType === 'sms' ? 'SMS' : 'Script de Llamada'}
+                {modalType === 'email' 
+                  ? 'Email' 
+                  : modalType === 'sms' 
+                    ? (user?.userClientData?.country?.toLowerCase().trim() === 'argentina' ? 'WhatsApp' : 'SMS')
+                    : 'Script de Llamada'}
               </Text>
               <TouchableOpacity onPress={handleCloseModal} style={styles.modalCloseButton}>
                 <Ionicons name="close-outline" size={24} color={colors.textPrimary} />
@@ -3132,7 +3213,11 @@ const FacebookLeadsListInner = (
               {(modalType === 'sms' || modalType === 'email') && (
                 <TouchableOpacity
                   style={[styles.modalActionButton, styles.sendButton, styles.fullWidthButton]}
-                  onPress={modalType === 'sms' ? handleSendSMSFromModal : handleSendEmailFromModal}
+                  onPress={
+                    modalType === 'sms' 
+                      ? (user?.userClientData?.country?.toLowerCase().trim() === 'argentina' ? handleSendWhatsAppFromModal : handleSendSMSFromModal)
+                      : handleSendEmailFromModal
+                  }
                   activeOpacity={0.7}
                 >
                   <Ionicons name="send-outline" size={20} color="#fff" />
@@ -4150,7 +4235,6 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
     width: '100%',
     ...(Platform.OS === 'web' && {
-      outline: 'none',
       cursor: 'pointer',
       fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
       transition: 'border-color 0.15s ease',
@@ -4159,7 +4243,6 @@ const styles = StyleSheet.create({
       MozAppearance: 'textfield',
       boxShadow: 'none',
       borderStyle: 'solid',
-      padding: '14px 20px',
       paddingLeft: '20px',
       paddingRight: '20px',
       paddingTop: '14px',
@@ -4177,7 +4260,6 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
     width: '100%',
     ...(Platform.OS === 'web' && {
-      outline: 'none',
       cursor: 'pointer',
       fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
       transition: 'border-color 0.15s ease',
@@ -4186,7 +4268,6 @@ const styles = StyleSheet.create({
       MozAppearance: 'textfield',
       boxShadow: 'none',
       borderStyle: 'solid',
-      padding: '14px 20px',
       paddingLeft: '20px',
       paddingRight: '20px',
       paddingTop: '14px',

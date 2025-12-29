@@ -124,18 +124,8 @@ export const authService = {
           
           const clientResponse = await axiosInstance.get(clientUrl);
           
-          console.log('✅ Datos del cliente obtenidos durante login:', {
-            status: clientResponse.status,
-            data: clientResponse.data,
-          });
-          
-          // Agregar los datos del cliente al objeto user
-          // Si la respuesta es un array, tomar el primer elemento; si es un objeto, usarlo directamente
-          const clientData = Array.isArray(clientResponse.data) 
-            ? clientResponse.data[0] 
-            : clientResponse.data;
-          
-          userData.userClientData = clientData;
+          // response.data puede ser un array o un objeto, extraer el primer elemento si es array
+          userData.userClientData = Array.isArray(clientResponse.data) ? clientResponse.data[0] : clientResponse.data;
         } catch (clientError: any) {
           console.warn('⚠️ Error obteniendo datos del cliente durante login:', {
             code: clientError.code,
@@ -447,9 +437,17 @@ export const authService = {
           const clientResponse = await axiosInstance.get(
             `${API_BASE_URL}/clients/get/client/${userData.clientId}`
           );
-          const clientData = Array.isArray(clientResponse.data) 
-            ? clientResponse.data[0] 
-            : clientResponse.data;
+          
+          // Manejar diferentes estructuras de respuesta del backend
+          // Puede venir como response.data.data o directamente como response.data
+          let rawData = clientResponse.data;
+          if (rawData && typeof rawData === 'object' && 'data' in rawData && !Array.isArray(rawData)) {
+            rawData = (rawData as any).data;
+          }
+          
+          const clientData = Array.isArray(rawData) 
+            ? rawData[0] 
+            : rawData;
           user.userClientData = clientData;
           console.log('✅ Datos del cliente obtenidos');
         } catch (clientError) {

@@ -350,6 +350,50 @@ export const facebookLeadsService = {
     return response.data.data;
   },
 
+  // Eliminar fecha de cita agendada y su recordatorio
+  deleteAppointmentDate: async (leadId: number): Promise<void> => {
+    const url = `${API_BASE_URL}/facebook-leads/${leadId}/appointment-date`;
+    console.log('🗑️ deleteAppointmentDate: Iniciando...');
+    console.log('🗑️ deleteAppointmentDate: URL:', url);
+    console.log('🗑️ deleteAppointmentDate: leadId:', leadId);
+    
+    try {
+      await api.delete(url);
+      console.log('✅ deleteAppointmentDate: Fecha de cita agendada eliminada exitosamente');
+    } catch (error: any) {
+      console.error('❌ deleteAppointmentDate: Error:', {
+        error,
+        message: error?.message,
+        response: error?.response?.data,
+        status: error?.response?.status,
+        url: error?.config?.url,
+      });
+      throw error;
+    }
+  },
+
+  // Eliminar fecha de recontacto y su recordatorio
+  deleteRecontactDate: async (leadId: number): Promise<void> => {
+    const url = `${API_BASE_URL}/facebook-leads/${leadId}/recontact-date`;
+    console.log('🗑️ deleteRecontactDate: Iniciando...');
+    console.log('🗑️ deleteRecontactDate: URL:', url);
+    console.log('🗑️ deleteRecontactDate: leadId:', leadId);
+    
+    try {
+      await api.delete(url);
+      console.log('✅ deleteRecontactDate: Fecha de recontacto eliminada exitosamente');
+    } catch (error: any) {
+      console.error('❌ deleteRecontactDate: Error:', {
+        error,
+        message: error?.message,
+        response: error?.response?.data,
+        status: error?.response?.status,
+        url: error?.config?.url,
+      });
+      throw error;
+    }
+  },
+
   // Enviar recordatorio específico
   sendReminder: async (reminderId: number): Promise<{ success: boolean; message: string }> => {
     const response = await api.post<ApiResponse<{ success: boolean; message: string }>>(
