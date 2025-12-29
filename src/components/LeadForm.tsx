@@ -118,7 +118,7 @@ export const LeadForm: React.FC<LeadFormProps> = ({ lead, onSuccess, onCancel })
 
         <View style={styles.formRow}>
           <View style={styles.formGroup}>
-            <Text style={styles.label}>Teléfono Manual</Text>
+            <Text style={styles.label}>Teléfono 1</Text>
             <View style={styles.inputContainer}>
               <Ionicons name="call-outline" size={18} color={colors.textSecondary} style={styles.inputIcon} />
               <TextInput
@@ -134,7 +134,7 @@ export const LeadForm: React.FC<LeadFormProps> = ({ lead, onSuccess, onCancel })
           </View>
 
           <View style={styles.formGroup}>
-            <Text style={styles.label}>Teléfono Auto</Text>
+            <Text style={styles.label}>Teléfono 2</Text>
             <View style={styles.inputContainer}>
               <Ionicons name="call-outline" size={18} color={colors.textSecondary} style={styles.inputIcon} />
               <TextInput

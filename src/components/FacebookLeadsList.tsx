@@ -23,6 +23,7 @@ interface FacebookLeadsListProps {
   onEdit?: (lead: FacebookLead) => void;
   onNew?: () => void;
   filterLeadId?: number; // ID del lead para filtrar (mostrar solo ese lead)
+  searchQuery?: string; // Query de búsqueda desde el header
 }
 
 export interface FacebookLeadsListRef {
@@ -32,7 +33,7 @@ export interface FacebookLeadsListRef {
 }
 
 const FacebookLeadsListInner = (
-  { onEdit, onNew, filterLeadId }: FacebookLeadsListProps, 
+  { onEdit, onNew, filterLeadId, searchQuery: externalSearchQuery }: FacebookLeadsListProps, 
   ref: React.ForwardedRef<FacebookLeadsListRef>
 ) => {
   // Control para mostrar/ocultar logs de debug
@@ -151,8 +152,11 @@ const FacebookLeadsListInner = (
       }
     }
   }, [user]);
+
   const [currentPage, setCurrentPage] = useState(1);
-  const [searchQuery, setSearchQuery] = useState('');
+  const [internalSearchQuery, setInternalSearchQuery] = useState('');
+  const searchQuery = externalSearchQuery !== undefined ? externalSearchQuery : internalSearchQuery;
+  const setSearchQuery = externalSearchQuery !== undefined ? (() => {}) : setInternalSearchQuery;
   const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
   const [searchLeads, setSearchLeads] = useState<FacebookLead[]>([]);
   const [searchPagination, setSearchPagination] = useState<PaginationInfo | null>(null);
@@ -160,6 +164,18 @@ const FacebookLeadsListInner = (
   const [searchError, setSearchError] = useState<string | null>(null);
   const [searchPage, setSearchPage] = useState(1);
   const [refreshing, setRefreshing] = useState(false);
+  const [isScrolled, setIsScrolled] = useState(false);
+  const topPaddingAnim = useRef(new Animated.Value(12)).current;
+
+  // Animación del padding top cuando se hace scroll
+  useEffect(() => {
+    Animated.timing(topPaddingAnim, {
+      toValue: isScrolled ? 0 : 12,
+      duration: 150,
+      useNativeDriver: false,
+    }).start();
+  }, [isScrolled, topPaddingAnim]);
+
   const limit = 10;
   const debounceTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [expandedLeadId, setExpandedLeadId] = useState<number | null>(null);
@@ -1503,7 +1519,7 @@ const FacebookLeadsListInner = (
   const getStatusColor = (status: string): string => {
     const statusColorMap: { [key: string]: string } = {
       'no-contest': '#f87171', // Rojo
-      'appointment': '#fbbf24', // Amarillo/naranja
+      'appointment': '#fb923c', // Naranja
       'recontact': '#60a5fa', // Azul
       'estimated-sold': '#34d399', // Verde
       'work-completed': '#818cf8', // Índigo
@@ -2152,52 +2168,54 @@ const FacebookLeadsListInner = (
   return (
     <View style={styles.container}>
 
-      {/* Barra de búsqueda y botón nuevo estimado */}
-      <View style={styles.searchRow}>
-        <View style={styles.searchContainer}>
-          <Ionicons name="search-outline" size={20} color={colors.textSecondary} style={styles.searchIcon} />
-          <TextInput
-            style={styles.searchInput}
-            placeholder="Buscar por nombre, teléfono o email..."
-            placeholderTextColor={colors.textTertiary}
-            value={searchQuery}
-            onChangeText={setSearchQuery}
-            autoCapitalize="none"
-            autoCorrect={false}
-            textAlignVertical="center"
-            {...(Platform.OS === 'android' && { includeFontPadding: false })}
-            {...(Platform.OS === 'web' && { 
-              // @ts-ignore - web only property
-              // outlineStyle removed - not supported in React Native
-            })}
-          />
-          {searchQuery.length > 0 && (
-            <TouchableOpacity
-              onPress={() => {
-                setSearchQuery('');
-                setDebouncedSearchQuery('');
-              }}
-              style={styles.clearButton}
-              activeOpacity={0.7}
+      {/* Barra de búsqueda y botón nuevo solo se muestran si no vienen desde el header */}
+      {externalSearchQuery === undefined && (
+        <View style={styles.searchRow}>
+          <View style={styles.searchContainer}>
+            <Ionicons name="search-outline" size={20} color={colors.textSecondary} style={styles.searchIcon} />
+            <TextInput
+              style={styles.searchInput}
+              placeholder="Buscar por nombre, teléfono o email..."
+              placeholderTextColor={colors.textTertiary}
+              value={searchQuery}
+              onChangeText={setSearchQuery}
+              autoCapitalize="none"
+              autoCorrect={false}
+              textAlignVertical="center"
+              {...(Platform.OS === 'android' && { includeFontPadding: false })}
+              {...(Platform.OS === 'web' && { 
+                // @ts-ignore - web only property
+                // outlineStyle removed - not supported in React Native
+              })}
+            />
+            {searchQuery.length > 0 && (
+              <TouchableOpacity
+                onPress={() => {
+                  setSearchQuery('');
+                  setDebouncedSearchQuery('');
+                }}
+                style={styles.clearButton}
+                activeOpacity={0.7}
+              >
+                <Ionicons name="close-circle" size={20} color={colors.textSecondary} />
+              </TouchableOpacity>
+            )}
+            {isSearching && displayLoading && (
+              <ActivityIndicator size="small" color={colors.primary} style={styles.searchLoading} />
+            )}
+          </View>
+          {onNew && (
+            <TouchableOpacity 
+              style={styles.newButton} 
+              onPress={onNew}
+              activeOpacity={0.8}
             >
-              <Ionicons name="close-circle" size={20} color={colors.textSecondary} />
+              <Ionicons name="add" size={20} color="#fff" style={styles.newButtonIcon} />
+              <Text style={styles.newButtonText}>Agregar</Text>
             </TouchableOpacity>
           )}
-          {isSearching && displayLoading && (
-            <ActivityIndicator size="small" color={colors.primary} style={styles.searchLoading} />
-          )}
         </View>
-        {onNew && (
-          <TouchableOpacity 
-            style={styles.newButton} 
-            onPress={onNew}
-            activeOpacity={0.8}
-          >
-            <Ionicons name="add" size={20} color="#fff" style={styles.newButtonIcon} />
-            <Text style={styles.newButtonText}>Agregar</Text>
-          </TouchableOpacity>
-        )}
-      </View>
+      )}
 
       {isSearching && displayPagination && (
         <View style={styles.searchResultsInfo}>
@@ -2354,6 +2372,11 @@ const FacebookLeadsListInner = (
         style={styles.scrollView} 
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
+        onScroll={(e) => {
+          const scrollY = e.nativeEvent.contentOffset.y;
+          setIsScrolled(scrollY > 5);
+        }}
+        scrollEventThrottle={16}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
@@ -2363,6 +2386,7 @@ const FacebookLeadsListInner = (
           />
         }
       >
+        <Animated.View style={{ paddingTop: topPaddingAnim }}>
         {displayLeads.length === 0 && !displayLoading ? (
           <View style={styles.emptyContainer}>
             <Ionicons 
@@ -3119,6 +3143,7 @@ const FacebookLeadsListInner = (
             );
           })
         )}
+        </Animated.View>
       </ScrollView>
 
       {!isSearching && displayPagination && displayPagination.totalPages > 1 && (
@@ -3657,7 +3682,9 @@ export const FacebookLeadsList = forwardRef(FacebookLeadsListInner);
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    padding: 16,
+    paddingHorizontal: 16,
+    paddingBottom: 16,
+    paddingTop: 0,
   },
   centerContainer: {
     flex: 1,
@@ -3849,17 +3876,17 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingTop: 16,
-    paddingBottom: Platform.OS === 'android' ? 32 : 16,
-    paddingHorizontal: 8,
+    paddingTop: 8,
+    paddingBottom: Platform.OS === 'android' ? 40 : 32,
+    paddingHorizontal: 12,
     borderTopWidth: 1,
     borderTopColor: colors.border,
     backgroundColor: colors.backgroundSecondary,
   },
   paginationButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 12,
+    width: 36,
+    height: 36,
+    borderRadius: 8,
     backgroundColor: colors.background,
     justifyContent: 'center',
     alignItems: 'center',
@@ -3871,15 +3898,15 @@ const styles = StyleSheet.create({
   },
   paginationInfo: {
     alignItems: 'center',
-    gap: 4,
+    gap: 2,
   },
   paginationText: {
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: '600',
     color: colors.textPrimary,
   },
   paginationSubtext: {
-    fontSize: 12,
+    fontSize: 11,
     color: colors.textSecondary,
   },
   scrollContent: {
@@ -4320,7 +4347,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#fca5a5', // Rojo medio
   },
   statusButtonAppointment: {
-    backgroundColor: '#fcd34d', // Amarillo medio
+    backgroundColor: '#fb923c', // Naranja
   },
   statusButtonRecontact: {
     backgroundColor: '#93c5fd', // Azul medio

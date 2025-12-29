@@ -4,6 +4,7 @@ export interface Client {
   id: number;
   businessName: string;
   leadsNotificationAllDay: boolean;
+  aiMessageInstructions?: string;
   // ... otros campos
 }
 
@@ -15,6 +16,7 @@ export interface ApiResponse<T> {
 
 export interface UpdateClientDto {
   leadsNotificationAllDay?: boolean;
+  aiMessageInstructions?: string;
   // ... otros campos opcionales
 }
 

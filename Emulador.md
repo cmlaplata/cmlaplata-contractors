@@ -5,8 +5,7 @@ Puerto de apertura: 8089
 
 Genera APK
 eas build --platform android --profile preview
-eas update --branch preview --message "arreglos rapidos"
-
+git ad
 Debuggear
 En la app del emuladro ctrl+m
 chrome://inspect

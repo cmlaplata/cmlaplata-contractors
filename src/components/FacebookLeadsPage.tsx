@@ -1,9 +1,10 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { View, StyleSheet, TouchableOpacity, Text, Alert, ActivityIndicator, Modal, Platform, ScrollView, Image, Linking } from 'react-native';
+import { View, StyleSheet, TouchableOpacity, Text, Alert, ActivityIndicator, Modal, Platform, ScrollView, Image, Linking, TextInput } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { FacebookLeadsList, FacebookLeadsListRef } from './FacebookLeadsList';
 import { LeadForm } from './LeadForm';
 import { useClientNotifications } from '../hooks/useClientNotifications';
+import { useClientMessages } from '../hooks/useClientMessages';
 import { MobileDrawer } from './MobileDrawer';
 import { FacebookLead, facebookLeadsService } from '../services/facebookLeadsService';
 import { useAuth } from '../context/AuthContext';
@@ -26,6 +27,8 @@ export const FacebookLeadsPage: React.FC<FacebookLeadsPageProps> = ({ leadId }) 
   const [showMobileDrawer, setShowMobileDrawer] = useState(false);
   const [showLogoutModal, setShowLogoutModal] = useState(false);
   const [showNotificationsModal, setShowNotificationsModal] = useState(false);
+  const [showMessagesModal, setShowMessagesModal] = useState(false);
+  const [messagesInstructions, setMessagesInstructions] = useState('');
   const listRef = useRef<FacebookLeadsListRef>(null);
   const { user, logout } = useAuth();
   const router = useRouter();
@@ -52,6 +55,18 @@ export const FacebookLeadsPage: React.FC<FacebookLeadsPageProps> = ({ leadId }) 
     updating: notificationsUpdating,
     toggleNotifications,
   } = useClientNotifications(user?.clientId);
+
+  const {
+    aiMessageInstructions,
+    loading: messagesLoading,
+    updating: messagesUpdating,
+    updateMessageInstructions,
+  } = useClientMessages(user?.clientId);
+
+  // Sincronizar el estado local con el valor del hook cuando cambia
+  useEffect(() => {
+    setMessagesInstructions(aiMessageInstructions);
+  }, [aiMessageInstructions]);
 
   // Deep links se manejan en [...unmatched].tsx y AuthGuard.tsx
   // Este componente solo recibe el leadId como prop desde dashboard.tsx
@@ -104,40 +119,60 @@ export const FacebookLeadsPage: React.FC<FacebookLeadsPageProps> = ({ leadId }) 
     setShowLogoutModal(false);
   };
 
+  const [searchQuery, setSearchQuery] = useState('');
+
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      <View style={[styles.header, { backgroundColor: '#00acec' }]}>
-        <View style={styles.headerLeft}>
-          <View style={styles.logoContainer}>
-            <Image 
-              source={require('../../assets/logo.png')} 
-              style={styles.logo}
-              resizeMode="cover"
-            />
-          </View>
-          {user?.name && (
-            <Text style={styles.userNameText}>{user.name}</Text>
-          )}
-        </View>
-        <View style={styles.headerActions}>
-          {isMobile ? (
-            <TouchableOpacity 
-              style={styles.menuButton} 
-              onPress={() => setShowMobileDrawer(true)}
-              activeOpacity={0.8}
+      {/* Header con barra de búsqueda y botón agregar */}
+      <View style={styles.newHeader}>
+        <View style={styles.searchContainer}>
+          <Ionicons name="search-outline" size={20} color={colors.textSecondary} style={styles.searchIcon} />
+          <TextInput
+            style={styles.searchInput}
+            placeholder="Buscar por nombre, teléfono o email..."
+            placeholderTextColor={colors.textTertiary}
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+            autoCapitalize="none"
+            autoCorrect={false}
+            textAlignVertical="center"
+            {...(Platform.OS === 'android' && { includeFontPadding: false })}
+          />
+          {searchQuery.length > 0 && (
+            <TouchableOpacity
+              onPress={() => setSearchQuery('')}
+              style={styles.clearButton}
+              activeOpacity={0.7}
             >
-              <Ionicons name="menu-outline" size={24} color="#fff" />
-            </TouchableOpacity>
-          ) : (
-            <TouchableOpacity 
-              style={styles.menuButton} 
-              onPress={() => setShowUserMenu(true)}
-              activeOpacity={0.8}
-            >
-              <Ionicons name="settings-outline" size={24} color="#fff" />
+              <Ionicons name="close-circle" size={20} color={colors.textSecondary} />
             </TouchableOpacity>
           )}
         </View>
+        <TouchableOpacity 
+          style={styles.newButton} 
+          onPress={handleNew}
+          activeOpacity={0.8}
+        >
+          <Ionicons name="add" size={20} color="#FFFFFF" style={styles.newButtonIcon} />
+          <Text style={styles.newButtonText}>Agregar</Text>
+        </TouchableOpacity>
+        {isMobile ? (
+          <TouchableOpacity 
+            style={styles.menuButton} 
+            onPress={() => setShowMobileDrawer(true)}
+            activeOpacity={0.8}
+          >
+            <Ionicons name="menu-outline" size={24} color="#FFFFFF" />
+          </TouchableOpacity>
+        ) : (
+          <TouchableOpacity 
+            style={styles.menuButton} 
+            onPress={() => setShowUserMenu(true)}
+            activeOpacity={0.8}
+          >
+            <Ionicons name="settings-outline" size={24} color="#FFFFFF" />
+          </TouchableOpacity>
+        )}
       </View>
 
 
@@ -148,7 +183,7 @@ export const FacebookLeadsPage: React.FC<FacebookLeadsPageProps> = ({ leadId }) 
           onCancel={handleFormCancel}
         />
       ) : (
-        <FacebookLeadsList ref={listRef} onEdit={handleEdit} onNew={handleNew} filterLeadId={leadId} />
+        <FacebookLeadsList ref={listRef} onEdit={handleEdit} onNew={handleNew} filterLeadId={leadId} searchQuery={searchQuery} />
       )}
 
       {/* Botón flotante para volver cuando se muestra un lead específico */}
@@ -174,6 +209,9 @@ export const FacebookLeadsPage: React.FC<FacebookLeadsPageProps> = ({ leadId }) 
           leadsNotificationAllDay={leadsNotificationAllDay}
           notificationsUpdating={notificationsUpdating}
           onToggleNotifications={toggleNotifications}
+          aiMessageInstructions={aiMessageInstructions}
+          messagesUpdating={messagesUpdating}
+          onOpenMessages={() => setShowMessagesModal(true)}
         />
       )}
 
@@ -203,24 +241,44 @@ export const FacebookLeadsPage: React.FC<FacebookLeadsPageProps> = ({ leadId }) 
               </View>
               <View style={styles.menuDivider} />
               {user?.clientId && (
-                <TouchableOpacity
-                  style={styles.menuItem}
-                  onPress={() => {
-                    setShowUserMenu(false);
-                    setShowNotificationsModal(true);
-                  }}
-                  disabled={notificationsUpdating}
-                  activeOpacity={0.7}
-                >
-                  <Ionicons 
-                    name="notifications-outline" 
-                    size={20} 
-                    color="#fff" 
-                  />
-                  <Text style={[styles.menuItemText, { color: '#fff' }]}>
-                    Notificaciones
-                  </Text>
-                </TouchableOpacity>
+                <>
+                  <TouchableOpacity
+                    style={styles.menuItem}
+                    onPress={() => {
+                      setShowUserMenu(false);
+                      setShowNotificationsModal(true);
+                    }}
+                    disabled={notificationsUpdating}
+                    activeOpacity={0.7}
+                  >
+                    <Ionicons 
+                      name="notifications-outline" 
+                      size={20} 
+                      color="#fff" 
+                    />
+                    <Text style={[styles.menuItemText, { color: '#fff' }]}>
+                      Notificaciones
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.menuItem}
+                    onPress={() => {
+                      setShowUserMenu(false);
+                      setShowMessagesModal(true);
+                    }}
+                    disabled={messagesUpdating}
+                    activeOpacity={0.7}
+                  >
+                    <Ionicons 
+                      name="chatbubble-outline" 
+                      size={20} 
+                      color="#fff" 
+                    />
+                    <Text style={[styles.menuItemText, { color: '#fff' }]}>
+                      Mensajes
+                    </Text>
+                  </TouchableOpacity>
+                </>
               )}
               <TouchableOpacity
                 style={styles.menuItem}
@@ -255,7 +313,7 @@ export const FacebookLeadsPage: React.FC<FacebookLeadsPageProps> = ({ leadId }) 
               <Ionicons
                 name={leadsNotificationAllDay ? 'notifications' : 'notifications-off'}
                 size={32}
-                color={colors.primary}
+                color="#FFFFFF"
               />
               <Text style={styles.notificationsModalTitle}>Notificaciones</Text>
             </View>
@@ -355,6 +413,81 @@ export const FacebookLeadsPage: React.FC<FacebookLeadsPageProps> = ({ leadId }) 
           </View>
         </TouchableOpacity>
       </Modal>
+
+      {/* Modal de configuración de mensajes */}
+      <Modal
+        visible={showMessagesModal}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setShowMessagesModal(false)}
+      >
+        <TouchableOpacity
+          style={styles.notificationsModalOverlay}
+          activeOpacity={1}
+          onPress={() => setShowMessagesModal(false)}
+        >
+          <TouchableOpacity
+            style={styles.notificationsModalContainer}
+            activeOpacity={1}
+            onPress={(e) => e.stopPropagation()}
+          >
+            <View style={styles.notificationsModalHeader}>
+              <Ionicons
+                name="chatbubble-outline"
+                size={32}
+                color="#FFFFFF"
+              />
+              <Text style={styles.notificationsModalTitle}>Mensajes</Text>
+            </View>
+
+            <Text style={styles.messagesModalDescription}>
+              Instrucciones específicas para la generación de mensajes que hace la IA
+            </Text>
+
+            <TextInput
+              style={styles.messagesTextInput}
+              placeholder="Escribe aquí las instrucciones para la IA..."
+              placeholderTextColor={colors.textTertiary}
+              value={messagesInstructions}
+              onChangeText={setMessagesInstructions}
+              multiline
+              numberOfLines={8}
+              textAlignVertical="top"
+              editable={!messagesUpdating}
+            />
+
+            <View style={styles.notificationsModalButtons}>
+              <TouchableOpacity
+                style={[styles.notificationsModalButton, styles.notificationsModalButtonCancel]}
+                onPress={() => setShowMessagesModal(false)}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.notificationsModalButtonCancelText}>Cancelar</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.notificationsModalButton, styles.notificationsModalButtonConfirm]}
+                onPress={async () => {
+                  try {
+                    if (updateMessageInstructions) {
+                      await updateMessageInstructions(messagesInstructions);
+                      setShowMessagesModal(false);
+                    }
+                  } catch (err) {
+                    console.error('Error al actualizar instrucciones:', err);
+                    Alert.alert('Error', 'No se pudieron actualizar las instrucciones');
+                  }
+                }}
+                disabled={messagesUpdating}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.notificationsModalButtonConfirmText}>
+                  {messagesUpdating ? 'Guardando...' : 'Guardar'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
     </SafeAreaView>
   );
 };
@@ -363,6 +496,60 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.background,
+  },
+  newHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 16,
+    backgroundColor: colors.primary,
+    borderBottomWidth: 0,
+    gap: 12,
+  },
+  searchContainer: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderWidth: 0,
+  },
+  searchIcon: {
+    marginRight: 8,
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 15,
+    color: colors.textPrimary,
+    paddingVertical: Platform.OS === 'android' ? 4 : 2,
+    minWidth: 0,
+  },
+  clearButton: {
+    padding: 4,
+    marginLeft: 4,
+  },
+  newButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 12,
+    justifyContent: 'center',
+    minHeight: 40,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.3)',
+  },
+  newButtonIcon: {
+    marginTop: 2,
+  },
+  newButtonText: {
+    color: '#FFFFFF',
+    fontWeight: '600',
+    fontSize: 13,
+    letterSpacing: 0.3,
   },
   header: {
     flexDirection: 'row',
@@ -570,11 +757,18 @@ const styles = StyleSheet.create({
   notificationsModalHeader: {
     alignItems: 'center',
     marginBottom: 20,
+    backgroundColor: colors.primary,
+    marginHorizontal: -24,
+    marginTop: -24,
+    paddingVertical: 20,
+    paddingHorizontal: 24,
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
   },
   notificationsModalTitle: {
     fontSize: 20,
     fontWeight: '700',
-    color: colors.textPrimary,
+    color: '#FFFFFF',
     marginTop: 12,
     textAlign: 'center',
   },
@@ -633,5 +827,24 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
     color: '#fff',
+  },
+  messagesModalDescription: {
+    fontSize: 14,
+    color: colors.textSecondary,
+    marginBottom: 16,
+    textAlign: 'center',
+  },
+  messagesTextInput: {
+    backgroundColor: colors.backgroundTertiary,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: 16,
+    fontSize: 15,
+    color: colors.textPrimary,
+    minHeight: 150,
+    maxHeight: 300,
+    marginBottom: 24,
+    textAlignVertical: 'top',
   },
 });

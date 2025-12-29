@@ -22,6 +22,9 @@ interface MobileDrawerProps {
   leadsNotificationAllDay?: boolean;
   notificationsUpdating?: boolean;
   onToggleNotifications?: () => void;
+  aiMessageInstructions?: string;
+  messagesUpdating?: boolean;
+  onOpenMessages?: () => void;
 }
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
@@ -37,6 +40,8 @@ export const MobileDrawer: React.FC<MobileDrawerProps> = ({
   leadsNotificationAllDay,
   notificationsUpdating,
   onToggleNotifications,
+  onOpenMessages,
+  messagesUpdating,
 }) => {
   const slideAnim = useRef(new Animated.Value(-DRAWER_WIDTH)).current;
   const overlayOpacity = useRef(new Animated.Value(0)).current;
@@ -122,6 +127,7 @@ export const MobileDrawer: React.FC<MobileDrawerProps> = ({
             <TouchableOpacity
               style={styles.menuItem}
               onPress={() => {
+                onClose();
                 setShowNotificationsModal(true);
               }}
               disabled={notificationsUpdating}
@@ -134,6 +140,26 @@ export const MobileDrawer: React.FC<MobileDrawerProps> = ({
               />
               <Text style={[styles.menuItemText, { color: '#fff' }]}>
                 Notificaciones
+              </Text>
+            </TouchableOpacity>
+          )}
+          {clientId && onOpenMessages && (
+            <TouchableOpacity
+              style={styles.menuItem}
+              onPress={() => {
+                onClose();
+                onOpenMessages();
+              }}
+              disabled={messagesUpdating}
+              activeOpacity={0.7}
+            >
+              <Ionicons 
+                name="chatbubble-outline" 
+                size={24} 
+                color="#fff" 
+              />
+              <Text style={[styles.menuItemText, { color: '#fff' }]}>
+                Mensajes
               </Text>
             </TouchableOpacity>
           )}
