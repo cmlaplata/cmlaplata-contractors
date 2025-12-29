@@ -1,5 +1,5 @@
 import React, { useState, useImperativeHandle, forwardRef, useEffect, useRef, useMemo, useCallback } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, ActivityIndicator, TextInput, Platform, Animated, Modal, Linking, RefreshControl } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, ActivityIndicator, TextInput, Platform, Animated, Modal, Linking, RefreshControl, Dimensions } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFacebookLeads } from '../hooks/useFacebookLeads';
@@ -166,6 +166,29 @@ const FacebookLeadsListInner = (
   const [refreshing, setRefreshing] = useState(false);
   const [isScrolled, setIsScrolled] = useState(false);
   const topPaddingAnim = useRef(new Animated.Value(12)).current;
+  const [screenWidth, setScreenWidth] = useState(Dimensions.get('window').width);
+
+  // Detectar cambios en el tamaño de pantalla
+  useEffect(() => {
+    const subscription = Dimensions.addEventListener('change', ({ window }) => {
+      setScreenWidth(window.width);
+    });
+    return () => subscription?.remove();
+  }, []);
+
+  // Calcular número de columnas según el tamaño de pantalla
+  const getColumnsCount = useMemo(() => {
+    if (Platform.OS === 'web') {
+      if (screenWidth >= 1440) {
+        return 4; // Desktop grande
+      } else if (screenWidth >= 1024) {
+        return 3; // Notebook
+      } else if (screenWidth >= 768) {
+        return 3; // Tablet
+      }
+    }
+    return 1; // Mobile/App
+  }, [screenWidth]);
 
   // Animación del padding top cuando se hace scroll
   useEffect(() => {
@@ -2413,7 +2436,8 @@ const FacebookLeadsListInner = (
             </Text>
           </View>
         ) : (
-          displayLeads.map((lead) => {
+          <View style={[styles.leadsGrid, getColumnsCount > 1 && { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-start' }]}>
+          {displayLeads.map((lead) => {
             const isExpanded = expandedLeadId === lead.id;
             if (!animatedHeights.current[lead.id]) {
               animatedHeights.current[lead.id] = new Animated.Value(0);
@@ -2474,8 +2498,15 @@ const FacebookLeadsListInner = (
               )
             );
 
+            const containerPadding = Platform.OS === 'web' ? 32 : 32; // padding horizontal del contenedor (16 * 2)
+            const gap = 12; // gap entre cards
+            const availableWidth = screenWidth - containerPadding;
+            const cardWidth = getColumnsCount > 1 
+              ? (availableWidth - (gap * (getColumnsCount - 1))) / getColumnsCount
+              : availableWidth;
+            
             return (
-              <View key={lead.id} style={styles.leadCard}>
+              <View key={lead.id} style={[styles.leadCard, getColumnsCount > 1 && { width: cardWidth }]}>
                 <View style={styles.leadContent}>
                   <View style={styles.leadInfo}>
                     {/* Mostrar nombre del negocio si includeChildrenLeads es true o 1 */}
@@ -2638,10 +2669,14 @@ const FacebookLeadsListInner = (
                         <Text style={styles.infoText}>{lead.extraInfo}</Text>
                       </View>
                     )}
-                    <View style={styles.infoRow}>
-                      <Ionicons name="time-outline" size={16} color={colors.textSecondary} />
-                      <Text style={styles.dateText}>{formatDate(lead.createdAt)}</Text>
-                    </View>
+                    {lead.createdAt && (
+                      <View style={styles.infoRow}>
+                        <Ionicons name="time-outline" size={16} color={colors.textSecondary} />
+                        <Text style={styles.infoText}>
+                          Llegó el: {formatDate(lead.createdAt)}
+                        </Text>
+                      </View>
+                    )}
                   </View>
                   <View style={styles.tutorialContainer}>
                     <TouchableOpacity
@@ -3150,7 +3185,8 @@ const FacebookLeadsListInner = (
                 })()}
               </View>
             );
-          })
+          })}
+          </View>
         )}
         </Animated.View>
       </ScrollView>
@@ -3920,6 +3956,10 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     flexGrow: 1,
+  },
+  leadsGrid: {
+    gap: 12,
+    width: '100%',
   },
   scrollView: {
     flex: 1,
