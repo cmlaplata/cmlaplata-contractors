@@ -176,8 +176,16 @@ const FacebookLeadsListInner = (
     }).start();
   }, [isScrolled, topPaddingAnim]);
 
+  // Scroll hacia arriba cuando cambia de página
+  useEffect(() => {
+    if (scrollViewRef.current) {
+      scrollViewRef.current.scrollTo({ x: 0, y: 0, animated: true });
+    }
+  }, [currentPage, searchPage]);
+
   const limit = 10;
   const debounceTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scrollViewRef = useRef<ScrollView>(null);
   const [expandedLeadId, setExpandedLeadId] = useState<number | null>(null);
   const [expandedQuickResponse, setExpandedQuickResponse] = useState<number | null>(null);
   const [expandedClientStatus, setExpandedClientStatus] = useState<number | null>(null);
@@ -2369,6 +2377,7 @@ const FacebookLeadsListInner = (
       )}
 
       <ScrollView 
+        ref={scrollViewRef}
         style={styles.scrollView} 
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
