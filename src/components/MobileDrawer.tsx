@@ -8,6 +8,7 @@ import {
   Dimensions,
   TouchableWithoutFeedback,
   Modal,
+  Platform,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../theme/colors';
@@ -128,7 +129,10 @@ export const MobileDrawer: React.FC<MobileDrawerProps> = ({
               style={styles.menuItem}
               onPress={() => {
                 onClose();
-                setShowNotificationsModal(true);
+                // Pequeño delay para Android - esperar a que el drawer se cierre completamente
+                setTimeout(() => {
+                  setShowNotificationsModal(true);
+                }, Platform.OS === 'android' ? 300 : 0);
               }}
               disabled={notificationsUpdating}
               activeOpacity={0.7}

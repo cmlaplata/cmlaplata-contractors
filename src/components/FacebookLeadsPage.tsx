@@ -183,19 +183,17 @@ export const FacebookLeadsPage: React.FC<FacebookLeadsPageProps> = ({ leadId }) 
           onCancel={handleFormCancel}
         />
       ) : (
-        <FacebookLeadsList ref={listRef} onEdit={handleEdit} onNew={handleNew} filterLeadId={leadId} searchQuery={searchQuery} />
+        <FacebookLeadsList 
+          ref={listRef} 
+          onEdit={handleEdit} 
+          onNew={handleNew} 
+          filterLeadId={leadId} 
+          searchQuery={searchQuery}
+          onViewAllContacts={() => router.replace('/(tabs)/dashboard')}
+        />
       )}
 
-      {/* Botón flotante para volver cuando se muestra un lead específico */}
-      {leadId && !showForm && (
-        <TouchableOpacity
-          style={styles.floatingBackButton}
-          onPress={() => router.push('/(tabs)/dashboard')}
-          activeOpacity={0.8}
-        >
-          <Ionicons name="arrow-back" size={24} color="#fff" />
-        </TouchableOpacity>
-      )}
+      {/* Botón flotante para volver cuando se muestra un lead específico - OCULTO */}
 
       {/* Menú móvil - Drawer lateral */}
       {isMobile && (

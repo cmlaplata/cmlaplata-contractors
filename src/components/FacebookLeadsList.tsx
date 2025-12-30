@@ -24,6 +24,7 @@ interface FacebookLeadsListProps {
   onNew?: () => void;
   filterLeadId?: number; // ID del lead para filtrar (mostrar solo ese lead)
   searchQuery?: string; // Query de búsqueda desde el header
+  onViewAllContacts?: () => void; // Callback para ver todos los contactos
 }
 
 export interface FacebookLeadsListRef {
@@ -33,7 +34,7 @@ export interface FacebookLeadsListRef {
 }
 
 const FacebookLeadsListInner = (
-  { onEdit, onNew, filterLeadId, searchQuery: externalSearchQuery }: FacebookLeadsListProps, 
+  { onEdit, onNew, filterLeadId, searchQuery: externalSearchQuery, onViewAllContacts }: FacebookLeadsListProps, 
   ref: React.ForwardedRef<FacebookLeadsListRef>
 ) => {
   // Control para mostrar/ocultar logs de debug
@@ -3191,7 +3192,24 @@ const FacebookLeadsListInner = (
         </Animated.View>
       </ScrollView>
 
-      {!isSearching && displayPagination && displayPagination.totalPages > 1 && (
+      {filterLeadId ? (
+        <TouchableOpacity
+          style={styles.viewAllContactsButton}
+          onPress={() => {
+            if (onViewAllContacts) {
+              onViewAllContacts();
+            } else if (Platform.OS === 'web') {
+              window.location.href = '/dashboard';
+            } else {
+              Linking.openURL('cmlaplata://dashboard');
+            }
+          }}
+          activeOpacity={0.8}
+        >
+          <Ionicons name="arrow-back" size={20} color="#FFFFFF" />
+          <Text style={styles.viewAllContactsText}>Ver todos los contactos</Text>
+        </TouchableOpacity>
+      ) : !isSearching && displayPagination && displayPagination.totalPages > 1 && (
         <View style={styles.paginationContainer}>
           <TouchableOpacity
             style={[styles.paginationButton, (!displayPagination.hasPreviousPage || displayLoading) && styles.paginationButtonDisabled]}
@@ -3927,6 +3945,26 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: colors.border,
     backgroundColor: colors.backgroundSecondary,
+    marginLeft: -16, // Compensar el padding del container padre
+    marginRight: -16, // Compensar el padding del container padre
+    alignSelf: 'stretch',
+  },
+  viewAllContactsButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: colors.primary,
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+    marginHorizontal: 16,
+    marginBottom: Platform.OS === 'android' ? 40 : 32,
+    borderRadius: 12,
+  },
+  viewAllContactsText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '600',
   },
   paginationButton: {
     width: 36,
