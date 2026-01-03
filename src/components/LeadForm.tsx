@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, Alert, ActivityIndicator, Platform } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, ActivityIndicator, Platform } from 'react-native';
 import { useLeadOperations } from '../hooks/useLeadOperations';
 import { FacebookLead, CreateFacebookLeadDto, UpdateFacebookLeadDto } from '../services/facebookLeadsService';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../theme/colors';
+import { useAuth } from '../context/AuthContext';
 
 interface LeadFormProps {
   lead?: FacebookLead | null;
@@ -13,8 +14,18 @@ interface LeadFormProps {
 
 export const LeadForm: React.FC<LeadFormProps> = ({ lead, onSuccess, onCancel }) => {
   const { createLead, updateLead, loading, error } = useLeadOperations();
+  const { user } = useAuth();
+  
+  // Obtener clientId del userClientData
+  const clientIdFromUser = user?.userClientData?.id;
+  
+  console.log('📋 LeadForm - userClientData completo:', JSON.stringify(user?.userClientData, null, 2));
+  console.log('📋 LeadForm - clientIdFromUser:', clientIdFromUser);
+  console.log('📋 LeadForm - user existe?', !!user);
+  console.log('📋 LeadForm - user.userClientData existe?', !!user?.userClientData);
+  
   const [formData, setFormData] = useState<CreateFacebookLeadDto | UpdateFacebookLeadDto>({
-    clientId: lead?.clientId || undefined,
+    clientId: lead?.clientId || clientIdFromUser || 0, // Usar clientId del userClientData si no hay lead
     name: lead?.name || '',
     phoneManual: lead?.phoneManual || '',
     phoneAuto: lead?.phoneAuto || '',
@@ -35,10 +46,33 @@ export const LeadForm: React.FC<LeadFormProps> = ({ lead, onSuccess, onCancel })
     return lead[field] !== null && lead[field] !== undefined && lead[field] !== '';
   };
 
+  // Eliminar outline en web para los inputs
+  useEffect(() => {
+    if (Platform.OS === 'web') {
+      const style = document.createElement('style');
+      style.textContent = `
+        input[type="text"]:focus,
+        input[type="email"]:focus,
+        input[type="tel"]:focus,
+        textarea:focus {
+          outline: none !important;
+          outline-width: 0 !important;
+          outline-style: none !important;
+        }
+      `;
+      document.head.appendChild(style);
+      return () => {
+        if (document.head.contains(style)) {
+          document.head.removeChild(style);
+        }
+      };
+    }
+  }, []);
+
   useEffect(() => {
     if (lead) {
       setFormData({
-        clientId: lead.clientId || undefined,
+        clientId: lead.clientId || clientIdFromUser || 0,
         name: lead.name || '',
         phoneManual: lead.phoneManual || '',
         phoneAuto: lead.phoneAuto || '',
@@ -51,8 +85,16 @@ export const LeadForm: React.FC<LeadFormProps> = ({ lead, onSuccess, onCancel })
         data4: lead.data4 || '',
         data5: lead.data5 || '',
       });
+    } else {
+      // Si no hay lead (es nuevo), asegurar que siempre tenga clientId
+      if (clientIdFromUser) {
+        setFormData((prev) => ({
+          ...prev,
+          clientId: clientIdFromUser,
+        }));
+      }
     }
-  }, [lead]);
+  }, [lead, clientIdFromUser]);
 
   const handleChange = (field: string, value: string | number | undefined) => {
     setFormData((prev) => ({
@@ -64,14 +106,55 @@ export const LeadForm: React.FC<LeadFormProps> = ({ lead, onSuccess, onCancel })
   const handleSubmit = async () => {
     try {
       if (lead) {
-        await updateLead(lead.id, formData);
-        Alert.alert('Éxito', 'Lead actualizado correctamente');
+        console.log('📤 LeadForm - Actualizando lead:', {
+          leadId: lead.id,
+          formData: formData,
+        });
+        const updatedLead = await updateLead(lead.id, formData);
+        console.log('✅ LeadForm - Lead actualizado correctamente');
+        console.log('✅ LeadForm - Lead retornado:', JSON.stringify(updatedLead, null, 2));
+        console.log('📞 LeadForm - Llamando onSuccess callback...');
+        console.log('📞 LeadForm - onSuccess existe?', !!onSuccess);
+        if (onSuccess) {
+          onSuccess();
+          console.log('✅ LeadForm - onSuccess callback ejecutado');
+        } else {
+          console.warn('⚠️ LeadForm - onSuccess no está definido');
+        }
       } else {
-        await createLead(formData);
-        Alert.alert('Éxito', 'Lead creado correctamente');
+        // Asegurar que siempre se envíe el clientId al crear
+        const dataToSend: CreateFacebookLeadDto = {
+          ...formData,
+          clientId: clientIdFromUser || formData.clientId || 0,
+        };
+        
+        console.log('📤 LeadForm - Creando nuevo lead:');
+        console.log('📤 LeadForm - clientIdFromUser:', clientIdFromUser);
+        console.log('📤 LeadForm - formData.clientId:', formData.clientId);
+        console.log('📤 LeadForm - dataToSend completo:', JSON.stringify(dataToSend, null, 2));
+        
+        if (!dataToSend.clientId || dataToSend.clientId === 0) {
+          console.error('❌ LeadForm - ERROR: clientId es requerido pero no está disponible');
+          throw new Error('No se pudo obtener el ID del cliente. Por favor, inicia sesión nuevamente.');
+        }
+        
+        const createdLead = await createLead(dataToSend);
+        console.log('✅ LeadForm - Lead creado correctamente con clientId:', dataToSend.clientId);
+        console.log('✅ LeadForm - Lead retornado:', JSON.stringify(createdLead, null, 2));
+        console.log('📞 LeadForm - Llamando onSuccess callback...');
+        console.log('📞 LeadForm - onSuccess existe?', !!onSuccess);
+        if (onSuccess) {
+          onSuccess();
+          console.log('✅ LeadForm - onSuccess callback ejecutado');
+        } else {
+          console.warn('⚠️ LeadForm - onSuccess no está definido');
+        }
       }
-      onSuccess?.();
-    } catch (err) {
+    } catch (err: any) {
+      console.error('❌ LeadForm - Error al guardar lead:', err);
+      console.error('❌ LeadForm - Error message:', err?.message);
+      console.error('❌ LeadForm - Error response:', err?.response?.data);
+      console.error('❌ LeadForm - Error stack:', err?.stack);
       // Error ya está manejado en el hook
     }
   };
@@ -111,6 +194,11 @@ export const LeadForm: React.FC<LeadFormProps> = ({ lead, onSuccess, onCancel })
                 placeholder="Nombre completo"
                 placeholderTextColor={colors.textTertiary}
                 textAlignVertical="center"
+                {...(Platform.OS === 'web' && {
+                  // @ts-ignore - web only property
+                  outlineStyle: 'none',
+                  outlineWidth: 0,
+                })}
               />
             </View>
           </View>
@@ -129,6 +217,11 @@ export const LeadForm: React.FC<LeadFormProps> = ({ lead, onSuccess, onCancel })
                 placeholder="+54 9 11 1234-5678"
                 placeholderTextColor={colors.textTertiary}
                 textAlignVertical="center"
+                {...(Platform.OS === 'web' && {
+                  // @ts-ignore - web only property
+                  outlineStyle: 'none',
+                  outlineWidth: 0,
+                })}
               />
             </View>
           </View>
@@ -145,6 +238,11 @@ export const LeadForm: React.FC<LeadFormProps> = ({ lead, onSuccess, onCancel })
                 placeholder="+54 9 11 1234-5678"
                 placeholderTextColor={colors.textTertiary}
                 textAlignVertical="center"
+                {...(Platform.OS === 'web' && {
+                  // @ts-ignore - web only property
+                  outlineStyle: 'none',
+                  outlineWidth: 0,
+                })}
               />
             </View>
           </View>
@@ -164,6 +262,11 @@ export const LeadForm: React.FC<LeadFormProps> = ({ lead, onSuccess, onCancel })
                 placeholder="email@ejemplo.com"
                 placeholderTextColor={colors.textTertiary}
                 textAlignVertical="center"
+                {...(Platform.OS === 'web' && {
+                  // @ts-ignore - web only property
+                  outlineStyle: 'none',
+                  outlineWidth: 0,
+                })}
               />
             </View>
           </View>
@@ -176,9 +279,14 @@ export const LeadForm: React.FC<LeadFormProps> = ({ lead, onSuccess, onCancel })
                 style={styles.input}
                 value={formData.project || ''}
                 onChangeText={(value) => handleChange('project', value)}
-                placeholder="Nombre del proyecto"
+                placeholder="Proyecto"
                 placeholderTextColor={colors.textTertiary}
                 textAlignVertical="center"
+                {...(Platform.OS === 'web' && {
+                  // @ts-ignore - web only property
+                  outlineStyle: 'none',
+                  outlineWidth: 0,
+                })}
               />
             </View>
           </View>
@@ -195,11 +303,28 @@ export const LeadForm: React.FC<LeadFormProps> = ({ lead, onSuccess, onCancel })
               placeholder="Ciudad"
               placeholderTextColor={colors.textTertiary}
               textAlignVertical="center"
+              {...(Platform.OS === 'web' && {
+                // @ts-ignore - web only property
+                outlineStyle: 'none',
+                outlineWidth: 0,
+              })}
             />
           </View>
         </View>
 
         <View style={styles.formActions}>
+          {onCancel && (
+            <TouchableOpacity 
+              style={[styles.button, styles.cancelButton]} 
+              onPress={onCancel}
+              activeOpacity={0.8}
+            >
+              <View style={styles.buttonContent}>
+                <Ionicons name="arrow-back" size={20} color="#fff" />
+                <Text style={styles.buttonText}>Volver</Text>
+              </View>
+            </TouchableOpacity>
+          )}
           <TouchableOpacity
             style={[styles.button, styles.submitButton]}
             onPress={handleSubmit}
@@ -215,18 +340,6 @@ export const LeadForm: React.FC<LeadFormProps> = ({ lead, onSuccess, onCancel })
               </View>
             )}
           </TouchableOpacity>
-          {onCancel && (
-            <TouchableOpacity 
-              style={[styles.button, styles.cancelButton]} 
-              onPress={onCancel}
-              activeOpacity={0.8}
-            >
-              <View style={styles.buttonContent}>
-                <Ionicons name="close" size={20} color="#fff" />
-                <Text style={styles.buttonText}>Cancelar</Text>
-              </View>
-            </TouchableOpacity>
-          )}
         </View>
       </View>
     </ScrollView>
@@ -296,9 +409,15 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
     borderColor: colors.border,
     borderRadius: 12,
+    ...(Platform.OS === 'web' && {
+      outlineStyle: 'none',
+      outlineWidth: 0,
+      overflow: 'hidden',
+    }),
     backgroundColor: colors.backgroundSecondary,
     paddingHorizontal: 16,
     minHeight: 52,
+    overflow: 'hidden',
   },
   inputIcon: {
     marginRight: 12,
@@ -310,6 +429,16 @@ const styles = StyleSheet.create({
     paddingVertical: Platform.OS === 'android' ? 12 : 0,
     paddingTop: Platform.OS === 'android' ? 12 : 0,
     paddingBottom: Platform.OS === 'android' ? 12 : 0,
+    ...(Platform.OS === 'web' && {
+      outlineStyle: 'none',
+      outlineWidth: 0,
+      borderWidth: 0,
+      backgroundColor: 'transparent',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      maxWidth: '100%',
+    }),
+    overflow: 'hidden',
   },
   textareaContainer: {
     alignItems: 'flex-start',
@@ -320,12 +449,19 @@ const styles = StyleSheet.create({
     minHeight: 80,
     textAlignVertical: 'top',
     paddingTop: 0,
+    ...(Platform.OS === 'web' && {
+      outlineStyle: 'none',
+      outlineWidth: 0,
+      borderWidth: 0,
+      backgroundColor: 'transparent',
+    }),
   },
   formActions: {
     flexDirection: 'row',
     gap: 12,
     marginTop: 24,
     marginBottom: 40,
+    justifyContent: 'space-between',
   },
   button: {
     flex: 1,

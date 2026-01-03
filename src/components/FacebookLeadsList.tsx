@@ -1,5 +1,5 @@
 import React, { useState, useImperativeHandle, forwardRef, useEffect, useRef, useMemo, useCallback } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, ActivityIndicator, TextInput, Platform, Animated, Modal, Linking, RefreshControl, Dimensions } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, TextInput, Platform, Animated, Modal, Linking, RefreshControl, Dimensions } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFacebookLeads } from '../hooks/useFacebookLeads';
@@ -24,6 +24,8 @@ interface FacebookLeadsListProps {
   onNew?: () => void;
   filterLeadId?: number; // ID del lead para filtrar (mostrar solo ese lead)
   searchQuery?: string; // Query de búsqueda desde el header
+  clientStatusFilter?: string; // Filtro por estado de cliente ('all', 'no-contest', 'appointment', etc.)
+  onClientStatusFilterChange?: (filter: string) => void; // Callback para cambiar el filtro de estado
   onViewAllContacts?: () => void; // Callback para ver todos los contactos
 }
 
@@ -31,10 +33,11 @@ export interface FacebookLeadsListRef {
   refetch: () => void;
   getTotal: () => number;
   openLeadById: (leadId: number) => void;
+  clearMessagesCache: () => Promise<void>;
 }
 
 const FacebookLeadsListInner = (
-  { onEdit, onNew, filterLeadId, searchQuery: externalSearchQuery, onViewAllContacts }: FacebookLeadsListProps, 
+  { onEdit, onNew, filterLeadId, searchQuery: externalSearchQuery, clientStatusFilter = 'all', onClientStatusFilterChange, onViewAllContacts }: FacebookLeadsListProps, 
   ref: React.ForwardedRef<FacebookLeadsListRef>
 ) => {
   // Control para mostrar/ocultar logs de debug
@@ -166,7 +169,49 @@ const FacebookLeadsListInner = (
   const [searchPage, setSearchPage] = useState(1);
   const [refreshing, setRefreshing] = useState(false);
   const [isScrolled, setIsScrolled] = useState(false);
+  const [searchInputFocused, setSearchInputFocused] = useState(false);
   const topPaddingAnim = useRef(new Animated.Value(12)).current;
+  
+  // Eliminar outline en web para el input de búsqueda
+  useEffect(() => {
+    if (Platform.OS === 'web') {
+      const style = document.createElement('style');
+      style.textContent = `
+        input[type="text"]:focus,
+        input[type="search"]:focus,
+        input:focus,
+        input#search-input:focus,
+        textarea:focus {
+          outline: none !important;
+          outline-width: 0 !important;
+          outline-style: none !important;
+          border: none !important;
+          box-shadow: none !important;
+          -webkit-appearance: none !important;
+          -moz-appearance: none !important;
+        }
+        input[type="text"],
+        input[type="search"],
+        input,
+        input#search-input {
+          outline: none !important;
+          outline-width: 0 !important;
+          outline-style: none !important;
+          -webkit-appearance: none !important;
+          -moz-appearance: none !important;
+        }
+        *:focus {
+          outline: none !important;
+        }
+      `;
+      document.head.appendChild(style);
+      return () => {
+        if (document.head.contains(style)) {
+          document.head.removeChild(style);
+        }
+      };
+    }
+  }, []);
   const [screenWidth, setScreenWidth] = useState(Dimensions.get('window').width);
 
   // Detectar cambios en el tamaño de pantalla
@@ -241,11 +286,16 @@ const FacebookLeadsListInner = (
   const [reviewConfirmationModalVisible, setReviewConfirmationModalVisible] = useState(false);
   const [reviewConfirmationLeadId, setReviewConfirmationLeadId] = useState<number | null>(null);
   const [showTutorial, setShowTutorial] = useState(false);
+  const [showStatusFilterModal, setShowStatusFilterModal] = useState(false);
   const [deleteDateTimeModalVisible, setDeleteDateTimeModalVisible] = useState(false);
   const [deleteDateTimeLead, setDeleteDateTimeLead] = useState<FacebookLead | null>(null);
+  const [toastVisible, setToastVisible] = useState(false);
+  const [toastMessage, setToastMessage] = useState('');
+  const toastOpacity = useRef(new Animated.Value(0)).current;
   const [deleteDateTimeType, setDeleteDateTimeType] = useState<'appointment' | 'recontact' | null>(null);
   const [specificLead, setSpecificLead] = useState<FacebookLead | null>(null); // Lead específico buscado por filterLeadId
   const animatedHeights = useRef<{ [key: number]: Animated.Value }>({});
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const quickResponseHeights = useRef<{ [key: number]: Animated.Value }>({});
   const clientStatusHeights = useRef<{ [key: number]: Animated.Value }>({});
   const clientStatusInfoHeights = useRef<{ [key: number]: Animated.Value }>({});
@@ -364,15 +414,15 @@ const FacebookLeadsListInner = (
     const initialStatuses: { [key: number]: string } = {};
     leads.forEach(lead => {
       if (lead.clientStatus) {
-        // El backend devuelve valores como "Trabajo terminado", pero el frontend usa códigos
+        // El backend devuelve valores como "Servicio completado", pero el frontend usa códigos
         // Mapear del backend al frontend para mantener consistencia
         const frontendStatus = Object.entries({
           'No contestó': 'no-contest',
           'Cita Agendada': 'appointment',
           'Cita agendada': 'appointment',
           'Por recontactar': 'recontact',
-          'Estimado vendido': 'estimated-sold',
-          'Trabajo terminado': 'work-completed',
+          'Vendido': 'estimated-sold',
+          'Servicio completado': 'work-completed',
         }).find(([backend]) => backend === lead.clientStatus)?.[1] || lead.clientStatus;
         initialStatuses[lead.id] = frontendStatus;
       }
@@ -491,8 +541,134 @@ const FacebookLeadsListInner = (
   // Usar testFilterId si está activo, sino usar filterLeadId de la prop
   const activeFilterId = testFilterId !== undefined ? testFilterId : filterLeadId;
   
+  // Función para mapear el estado del backend al formato del frontend
+  const mapBackendStatusToFrontend = (backendStatus: string | null): string => {
+    if (!backendStatus) return '';
+    
+    // Normalizar el string: trim, eliminar espacios múltiples y convertir a minúsculas para comparación
+    const normalized = backendStatus.trim().replace(/\s+/g, ' ').toLowerCase();
+    
+    // Mapeo normalizado (todas las variantes en minúsculas)
+    const backendToFrontend: { [key: string]: string } = {
+      'no contestó': 'no-contest',
+      'no contesto': 'no-contest',
+      'cita agendada': 'appointment',
+      'por recontactar': 'recontact',
+      'vendido': 'estimated-sold',
+      'servicio completado': 'work-completed',
+    };
+    
+    // Buscar coincidencia normalizada
+    const mapped = backendToFrontend[normalized];
+    if (mapped) {
+      return mapped;
+    }
+    
+    // Si no hay coincidencia exacta, intentar búsqueda parcial para "cita agendada"
+    // Esto cubre casos como "Cita Agendada", "CITA AGENDADA", "cita agendada", etc.
+    if (normalized.includes('cita') && normalized.includes('agendada')) {
+      return 'appointment';
+    }
+    
+    // Si no hay coincidencia, intentar con el valor original (por si acaso)
+    const originalMap: { [key: string]: string } = {
+      'No contestó': 'no-contest',
+      'No contesto': 'no-contest',
+      'Cita Agendada': 'appointment',
+      'Cita agendada': 'appointment',
+      'Por recontactar': 'recontact',
+      'Por Recontactar': 'recontact',
+      'Vendido': 'estimated-sold',
+      'Servicio completado': 'work-completed',
+    };
+    
+    const originalMapped = originalMap[backendStatus.trim()];
+    if (originalMapped) {
+      return originalMapped;
+    }
+    
+    // Si aún no hay coincidencia, intentar comparación case-insensitive directa
+    // Esto cubre casos donde el backend devuelve exactamente el mismo string pero con diferente capitalización
+    for (const [key, value] of Object.entries(originalMap)) {
+      if (key.toLowerCase() === normalized) {
+        return value;
+      }
+    }
+    
+    // Si no se encuentra ninguna coincidencia, devolver el valor original
+    console.warn('⚠️ mapBackendStatusToFrontend: Estado no mapeado:', backendStatus);
+    return backendStatus;
+  };
+
   const displayLeads = useMemo(() => {
     let filteredLeads = isSearching ? searchLeads : leads;
+    
+    // Filtrar por estado de cliente si se especifica
+    if (clientStatusFilter && clientStatusFilter !== 'all') {
+      // Log temporal para depurar - mostrar todos los estados cuando se filtra por appointment
+      if (clientStatusFilter === 'appointment') {
+        console.log('🔍 [APPOINTMENT FILTER] Total leads antes de filtrar:', filteredLeads.length);
+        const allStatuses = filteredLeads.map(lead => ({
+          id: lead.id,
+          name: lead.name,
+          clientStatus: lead.clientStatus,
+          clientStatusType: typeof lead.clientStatus,
+          clientStatusLength: lead.clientStatus?.length,
+          mapped: mapBackendStatusToFrontend(lead.clientStatus)
+        }));
+        console.log('🔍 [APPOINTMENT FILTER] Estados de todos los leads:');
+        allStatuses.forEach((status, index) => {
+          console.log(`  [${index}] Lead ${status.id} (${status.name}):`, {
+            backendStatus: status.clientStatus,
+            backendStatusRaw: JSON.stringify(status.clientStatus),
+            mapped: status.mapped,
+            matches: status.mapped === 'appointment'
+          });
+        });
+        
+        // Buscar leads que contengan "cita" o "agendada" en cualquier formato
+        const leadsWithCita = filteredLeads.filter(lead => {
+          const status = lead.clientStatus?.toLowerCase() || '';
+          return status.includes('cita') || status.includes('agendada');
+        });
+        console.log('🔍 [APPOINTMENT FILTER] Leads que contienen "cita" o "agendada":', leadsWithCita.length);
+        leadsWithCita.forEach(lead => {
+          console.log(`  Lead ${lead.id}:`, {
+            name: lead.name,
+            clientStatus: lead.clientStatus,
+            clientStatusRaw: JSON.stringify(lead.clientStatus),
+            mapped: mapBackendStatusToFrontend(lead.clientStatus)
+          });
+        });
+      }
+      
+      filteredLeads = filteredLeads.filter(lead => {
+        const frontendStatus = mapBackendStatusToFrontend(lead.clientStatus);
+        const matches = frontendStatus === clientStatusFilter;
+        // Log temporal para depurar
+        if (clientStatusFilter === 'appointment' || clientStatusFilter === 'estimated-sold' || clientStatusFilter === 'work-completed') {
+          console.log('🔍 Filter Debug:', {
+            leadId: lead.id,
+            backendStatus: lead.clientStatus,
+            backendStatusRaw: JSON.stringify(lead.clientStatus),
+            frontendStatus,
+            clientStatusFilter,
+            matches
+          });
+        }
+        return matches;
+      });
+      
+      // Log temporal para depurar - mostrar resultado después de filtrar
+      if (clientStatusFilter === 'appointment') {
+        console.log('🔍 [APPOINTMENT FILTER] Total leads después de filtrar:', filteredLeads.length);
+        console.log('🔍 [APPOINTMENT FILTER] Leads encontrados:', filteredLeads.map(lead => ({
+          id: lead.id,
+          name: lead.name,
+          clientStatus: lead.clientStatus
+        })));
+      }
+    }
     
     // Filtrar por leadId si se especifica (para mostrar solo un lead específico)
     if (activeFilterId) {
@@ -517,7 +693,7 @@ const FacebookLeadsListInner = (
     }
     
     return filteredLeads;
-  }, [isSearching, searchLeads, leads, activeFilterId, specificLead]);
+  }, [isSearching, searchLeads, leads, activeFilterId, specificLead, clientStatusFilter]);
   
   // Log cuando displayLeads cambia (crítico para Android)
   useEffect(() => {
@@ -611,17 +787,62 @@ const FacebookLeadsListInner = (
     console.log('🎨 [RENDER] IDs que se van a mostrar:', displayLeads.map(l => l.id));
     console.log('🎨 [RENDER] activeFilterId activo:', activeFilterId || 'No');
   }, [displayLeads.length, activeFilterId]);
-  const displayPagination = isSearching ? searchPagination : pagination;
+  // Calcular paginación basada en displayLeads cuando hay filtro de estado activo
+  const calculatedPagination = useMemo(() => {
+    // Si hay un filtro de estado activo (y no es 'all'), calcular paginación basada en displayLeads
+    if (clientStatusFilter && clientStatusFilter !== 'all' && !isSearching) {
+      const limit = 10;
+      const total = displayLeads.length;
+      const totalPages = Math.ceil(total / limit);
+      const currentPageNum = currentPage;
+      
+      return {
+        page: currentPageNum,
+        limit: limit,
+        total: total,
+        totalPages: totalPages,
+        hasNextPage: currentPageNum < totalPages,
+        hasPreviousPage: currentPageNum > 1,
+      };
+    }
+    return null;
+  }, [displayLeads.length, clientStatusFilter, currentPage, isSearching]);
+
+  // Aplicar paginación a displayLeads cuando hay filtro activo
+  const paginatedDisplayLeads = useMemo(() => {
+    // Si hay un filtro de estado activo, aplicar paginación
+    if (clientStatusFilter && clientStatusFilter !== 'all' && !isSearching && calculatedPagination) {
+      const limit = 10;
+      const startIndex = (currentPage - 1) * limit;
+      const endIndex = startIndex + limit;
+      return displayLeads.slice(startIndex, endIndex);
+    }
+    // Si no hay filtro, usar displayLeads completo (ya viene paginado del backend)
+    return displayLeads;
+  }, [displayLeads, clientStatusFilter, currentPage, isSearching, calculatedPagination]);
+
+  const displayPagination = calculatedPagination || (isSearching ? searchPagination : pagination);
   const displayLoading = isSearching ? searchLoading : loading;
   const displayError = isSearching ? searchError : error;
 
+  // Resetear página a 1 cuando cambia el filtro de estado
+  useEffect(() => {
+    if (clientStatusFilter && clientStatusFilter !== 'all' && !isSearching) {
+      setCurrentPage(1);
+    }
+  }, [clientStatusFilter, isSearching]);
+
   useImperativeHandle(ref, () => ({
     refetch: () => {
+      console.log('🔄 FacebookLeadsList.refetch - Iniciando refetch desde useImperativeHandle');
+      console.log('🔄 FacebookLeadsList.refetch - Reseteando estado...');
       setCurrentPage(1);
       setSearchPage(1);
       setSearchQuery('');
       setDebouncedSearchQuery('');
+      console.log('🔄 FacebookLeadsList.refetch - Llamando refetch del hook...');
       refetch();
+      console.log('✅ FacebookLeadsList.refetch - refetch del hook llamado');
     },
     getTotal: () => {
       return displayPagination?.total ?? displayLeads.length;
@@ -649,15 +870,13 @@ const FacebookLeadsListInner = (
             toggleMenu(leadId);
           } else {
             // Si aún no está, mostrar mensaje
-            Alert.alert(
-              'Lead no visible',
-              `El lead con ID ${leadId} no está visible en la lista actual. Por favor, búscalo manualmente.`,
-              [{ text: 'OK' }]
-            );
+            setErrorMessage(`El lead con ID ${leadId} no está visible en la lista actual. Por favor, búscalo manualmente.`);
+            setTimeout(() => setErrorMessage(null), 5000);
           }
         }, 1000);
       }
     },
+    clearMessagesCache,
   }));
 
   const handlePageChange = (newPage: number) => {
@@ -892,19 +1111,40 @@ const FacebookLeadsListInner = (
     }
   };
 
+  const showToast = (message: string) => {
+    setToastMessage(message);
+    setToastVisible(true);
+    Animated.sequence([
+      Animated.timing(toastOpacity, {
+        toValue: 1,
+        duration: 300,
+        useNativeDriver: true,
+      }),
+      Animated.delay(2000),
+      Animated.timing(toastOpacity, {
+        toValue: 0,
+        duration: 300,
+        useNativeDriver: true,
+      }),
+    ]).start(() => {
+      setToastVisible(false);
+    });
+  };
+
   const handleCopyLeadLink = async (leadId: number) => {
     try {
       const link = await copyDeepLink(`leads/${leadId}`);
-      Alert.alert('Link copiado', `Deep link copiado: ${link}`);
+      showToast('Link copiado');
     } catch (error) {
       const link = generateDeepLink(`leads/${leadId}`);
-      Alert.alert('Link generado', link);
+      showToast('Link copiado');
     }
   };
 
   const handleCallLead = (phoneNumber: string) => {
     if (!phoneNumber) {
-      Alert.alert('Error', 'Este lead no tiene un número de teléfono');
+      setErrorMessage('Este lead no tiene un número de teléfono');
+      setTimeout(() => setErrorMessage(null), 5000);
       return;
     }
 
@@ -913,21 +1153,24 @@ const FacebookLeadsListInner = (
     const phoneUrl = `tel:${cleanPhone}`;
 
     Linking.openURL(phoneUrl).catch((err) => {
-      Alert.alert('Error', 'No se pudo abrir la aplicación de llamadas');
+      setErrorMessage('No se pudo abrir la aplicación de llamadas');
+      setTimeout(() => setErrorMessage(null), 5000);
       console.error('Error al abrir tel:', err);
     });
   };
 
   const handleEmailLead = (email: string) => {
     if (!email) {
-      Alert.alert('Error', 'Este lead no tiene un email');
+      setErrorMessage('Este lead no tiene un email');
+      setTimeout(() => setErrorMessage(null), 5000);
       return;
     }
 
     const emailUrl = `mailto:${email}`;
 
     Linking.openURL(emailUrl).catch((err) => {
-      Alert.alert('Error', 'No se pudo abrir la aplicación de email');
+      setErrorMessage('No se pudo abrir la aplicación de email');
+      setTimeout(() => setErrorMessage(null), 5000);
       console.error('Error al abrir email:', err);
     });
   };
@@ -937,7 +1180,7 @@ const FacebookLeadsListInner = (
       if (Platform.OS === 'web') {
         if (navigator.clipboard && navigator.clipboard.writeText) {
           await navigator.clipboard.writeText(phoneNumber);
-          Alert.alert('Copiado', 'Número de teléfono copiado al portapapeles');
+          showToast('Teléfono copiado');
         } else {
           const textArea = document.createElement('textarea');
           textArea.value = phoneNumber;
@@ -947,19 +1190,20 @@ const FacebookLeadsListInner = (
           textArea.select();
           document.execCommand('copy');
           document.body.removeChild(textArea);
-          Alert.alert('Copiado', 'Número de teléfono copiado al portapapeles');
+          showToast('Teléfono copiado');
         }
       } else {
         try {
           const Clipboard = require('expo-clipboard');
           await Clipboard.setStringAsync(phoneNumber);
-          Alert.alert('Copiado', 'Número de teléfono copiado al portapapeles');
+          showToast('Teléfono copiado');
         } catch {
-          Alert.alert('Info', 'Selecciona el número y cópialo manualmente');
+          // Selecciona el número y cópialo manualmente
         }
       }
     } catch (error) {
-      Alert.alert('Error', 'No se pudo copiar el número');
+      setErrorMessage('No se pudo copiar el número');
+      setTimeout(() => setErrorMessage(null), 5000);
     }
   };
 
@@ -968,7 +1212,7 @@ const FacebookLeadsListInner = (
       if (Platform.OS === 'web') {
         if (navigator.clipboard && navigator.clipboard.writeText) {
           await navigator.clipboard.writeText(email);
-          Alert.alert('Copiado', 'Email copiado al portapapeles');
+          showToast('Email copiado');
         } else {
           const textArea = document.createElement('textarea');
           textArea.value = email;
@@ -978,19 +1222,20 @@ const FacebookLeadsListInner = (
           textArea.select();
           document.execCommand('copy');
           document.body.removeChild(textArea);
-          Alert.alert('Copiado', 'Email copiado al portapapeles');
+          showToast('Email copiado');
         }
       } else {
         try {
           const Clipboard = require('expo-clipboard');
           await Clipboard.setStringAsync(email);
-          Alert.alert('Copiado', 'Email copiado al portapapeles');
+          showToast('Email copiado');
         } catch {
-          Alert.alert('Info', 'Selecciona el email y cópialo manualmente');
+          // Selecciona el email y cópialo manualmente
         }
       }
     } catch (error) {
-      Alert.alert('Error', 'No se pudo copiar el email');
+      setErrorMessage('No se pudo copiar el email');
+      setTimeout(() => setErrorMessage(null), 5000);
     }
   };
 
@@ -1016,7 +1261,8 @@ const FacebookLeadsListInner = (
       
       showContentModal(result.content, 'sms', 'ingles', leadId);
     } catch (error: any) {
-      Alert.alert('Error', error.response?.data?.message || error.message || 'No se pudo generar el SMS');
+      setErrorMessage(error.response?.data?.message || error.message || 'No se pudo generar el SMS');
+      setTimeout(() => setErrorMessage(null), 5000);
     } finally {
       setGeneratingSMS(null);
     }
@@ -1047,7 +1293,8 @@ const FacebookLeadsListInner = (
       
       showContentModal(result.content, 'sms', language, leadId);
     } catch (error: any) {
-      Alert.alert('Error', error.response?.data?.message || error.message || 'No se pudo generar el mensaje de WhatsApp');
+      setErrorMessage(error.response?.data?.message || error.message || 'No se pudo generar el mensaje de WhatsApp');
+      setTimeout(() => setErrorMessage(null), 5000);
     } finally {
       setGeneratingWhatsApp(null);
     }
@@ -1078,7 +1325,8 @@ const FacebookLeadsListInner = (
       
       showContentModal(result.content, 'email', language, leadId);
     } catch (error: any) {
-      Alert.alert('Error', error.response?.data?.message || error.message || 'No se pudo generar el email');
+      setErrorMessage(error.response?.data?.message || error.message || 'No se pudo generar el email');
+      setTimeout(() => setErrorMessage(null), 5000);
     } finally {
       setGeneratingEmail(null);
     }
@@ -1090,7 +1338,7 @@ const FacebookLeadsListInner = (
         // Para web, usar la API del navegador
         if (navigator.clipboard && navigator.clipboard.writeText) {
           await navigator.clipboard.writeText(modalContent);
-          Alert.alert('Copiado', 'El contenido se ha copiado al portapapeles');
+          showToast('Contenido copiado');
         } else {
           // Fallback para navegadores antiguos
           const textArea = document.createElement('textarea');
@@ -1101,21 +1349,21 @@ const FacebookLeadsListInner = (
           textArea.select();
           document.execCommand('copy');
           document.body.removeChild(textArea);
-          Alert.alert('Copiado', 'El contenido se ha copiado al portapapeles');
+          showToast('Contenido copiado');
         }
       } else {
         // Para móvil, usar expo-clipboard
         try {
           const Clipboard = require('expo-clipboard');
           await Clipboard.setStringAsync(modalContent);
-          Alert.alert('Copiado', 'El contenido se ha copiado al portapapeles');
+          showToast('Contenido copiado');
         } catch {
           // Si no está disponible, el contenido es seleccionable en el modal
-          Alert.alert('Info', 'Selecciona el texto en el modal y cópialo manualmente');
+          // Selecciona el texto en el modal y cópialo manualmente
         }
       }
     } catch (error) {
-      Alert.alert('Info', 'Selecciona el texto en el modal y cópialo manualmente');
+      // Selecciona el texto en el modal y cópialo manualmente
     }
   };
 
@@ -1146,7 +1394,8 @@ const FacebookLeadsListInner = (
       setModalContent(result.content);
       setModalLanguage(newLanguage);
     } catch (error: any) {
-      Alert.alert('Error', error.response?.data?.message || error.message || 'No se pudo cambiar el idioma');
+      setErrorMessage(error.response?.data?.message || error.message || 'No se pudo cambiar el idioma');
+      setTimeout(() => setErrorMessage(null), 5000);
     } finally {
       setModalLoading(false);
     }
@@ -1162,20 +1411,23 @@ const FacebookLeadsListInner = (
 
   const handleSendSMSFromModal = () => {
     if (!modalLeadId) {
-      Alert.alert('Error', 'No se pudo identificar el lead');
+      setErrorMessage('No se pudo identificar el lead');
+      setTimeout(() => setErrorMessage(null), 5000);
       return;
     }
 
     // Buscar el lead en la lista
     const lead = displayLeads.find(l => l.id === modalLeadId);
     if (!lead) {
-      Alert.alert('Error', 'No se encontró el lead');
+      setErrorMessage('No se encontró el lead');
+      setTimeout(() => setErrorMessage(null), 5000);
       return;
     }
 
     const phone = lead.phone || lead.phoneManual || lead.phoneAuto;
     if (!phone) {
-      Alert.alert('Error', 'Este lead no tiene un número de teléfono');
+      setErrorMessage('Este lead no tiene un número de teléfono');
+      setTimeout(() => setErrorMessage(null), 5000);
       return;
     }
 
@@ -1197,27 +1449,31 @@ const FacebookLeadsListInner = (
     const smsUrl = `sms:${cleanPhone}?body=${encodedMessage}`;
 
     Linking.openURL(smsUrl).catch((err) => {
-      Alert.alert('Error', 'No se pudo abrir la aplicación de mensajes');
+      setErrorMessage('No se pudo abrir la aplicación de mensajes');
+      setTimeout(() => setErrorMessage(null), 5000);
       console.error('Error al abrir SMS:', err);
     });
   };
 
   const handleSendEmailFromModal = () => {
     if (!modalLeadId) {
-      Alert.alert('Error', 'No se pudo identificar el lead');
+      setErrorMessage('No se pudo identificar el lead');
+      setTimeout(() => setErrorMessage(null), 5000);
       return;
     }
 
     // Buscar el lead en la lista
     const lead = displayLeads.find(l => l.id === modalLeadId);
     if (!lead) {
-      Alert.alert('Error', 'No se encontró el lead');
+      setErrorMessage('No se encontró el lead');
+      setTimeout(() => setErrorMessage(null), 5000);
       return;
     }
 
     const email = lead.email;
     if (!email) {
-      Alert.alert('Error', 'Este lead no tiene un email');
+      setErrorMessage('Este lead no tiene un email');
+      setTimeout(() => setErrorMessage(null), 5000);
       return;
     }
 
@@ -1227,27 +1483,31 @@ const FacebookLeadsListInner = (
     const emailUrl = `mailto:${email}?subject=${encodedSubject}&body=${encodedBody}`;
 
     Linking.openURL(emailUrl).catch((err) => {
-      Alert.alert('Error', 'No se pudo abrir la aplicación de email');
+      setErrorMessage('No se pudo abrir la aplicación de email');
+      setTimeout(() => setErrorMessage(null), 5000);
       console.error('Error al abrir email:', err);
     });
   };
 
   const handleSendWhatsAppFromModal = () => {
     if (!modalLeadId) {
-      Alert.alert('Error', 'No se pudo identificar el lead');
+      setErrorMessage('No se pudo identificar el lead');
+      setTimeout(() => setErrorMessage(null), 5000);
       return;
     }
 
     // Buscar el lead en la lista
     const lead = displayLeads.find(l => l.id === modalLeadId);
     if (!lead) {
-      Alert.alert('Error', 'No se encontró el lead');
+      setErrorMessage('No se encontró el lead');
+      setTimeout(() => setErrorMessage(null), 5000);
       return;
     }
 
     const phone = lead.phone || lead.phoneManual || lead.phoneAuto;
     if (!phone) {
-      Alert.alert('Error', 'Este lead no tiene un número de teléfono');
+      setErrorMessage('Este lead no tiene un número de teléfono');
+      setTimeout(() => setErrorMessage(null), 5000);
       return;
     }
 
@@ -1272,7 +1532,8 @@ const FacebookLeadsListInner = (
     const whatsappUrl = `https://wa.me/${whatsappPhone}?text=${encodedMessage}`;
 
     Linking.openURL(whatsappUrl).catch((err) => {
-      Alert.alert('Error', 'No se pudo abrir WhatsApp');
+      setErrorMessage('No se pudo abrir WhatsApp');
+      setTimeout(() => setErrorMessage(null), 5000);
       console.error('Error al abrir WhatsApp:', err);
     });
   };
@@ -1325,6 +1586,24 @@ const FacebookLeadsListInner = (
     }
   };
 
+  const clearMessagesCache = async (): Promise<void> => {
+    try {
+      console.log('🗑️ Iniciando limpieza de cache de mensajes...');
+      const allKeys = await AsyncStorage.getAllKeys();
+      const messageCacheKeys = allKeys.filter(key => key.startsWith('generated-content-'));
+      
+      if (messageCacheKeys.length > 0) {
+        await AsyncStorage.multiRemove(messageCacheKeys);
+        console.log(`✅ Cache de mensajes limpiado: ${messageCacheKeys.length} entradas eliminadas`);
+      } else {
+        console.log('ℹ️ No se encontraron entradas de cache de mensajes para limpiar');
+      }
+    } catch (error) {
+      console.error('❌ Error limpiando cache de mensajes:', error);
+      throw error;
+    }
+  };
+
   const showContentModal = (content: string, type: 'email' | 'sms' | 'call', language: 'español' | 'ingles', leadId: number) => {
     setModalContent(content);
     setModalType(type);
@@ -1356,7 +1635,8 @@ const FacebookLeadsListInner = (
       
       showContentModal(result.content, 'email', language, leadId);
     } catch (error: any) {
-      Alert.alert('Error', error.response?.data?.message || error.message || 'No se pudo generar el email');
+      setErrorMessage(error.response?.data?.message || error.message || 'No se pudo generar el email');
+      setTimeout(() => setErrorMessage(null), 5000);
     } finally {
       setGeneratingEmail(null);
       closeMenu(leadId);
@@ -1386,7 +1666,8 @@ const FacebookLeadsListInner = (
       
       showContentModal(result.content, 'sms', 'ingles', leadId);
     } catch (error: any) {
-      Alert.alert('Error', error.response?.data?.message || error.message || 'No se pudo generar el SMS');
+      setErrorMessage(error.response?.data?.message || error.message || 'No se pudo generar el SMS');
+      setTimeout(() => setErrorMessage(null), 5000);
     } finally {
       setGeneratingSMS(null);
       closeMenu(leadId);
@@ -1416,7 +1697,8 @@ const FacebookLeadsListInner = (
       
       showContentModal(result.content, 'call', 'ingles', leadId);
     } catch (error: any) {
-      Alert.alert('Error', error.response?.data?.message || error.message || 'No se pudo generar el script de llamada');
+      setErrorMessage(error.response?.data?.message || error.message || 'No se pudo generar el script de llamada');
+      setTimeout(() => setErrorMessage(null), 5000);
     } finally {
       setGeneratingCall(null);
       closeMenu(leadId);
@@ -1542,8 +1824,8 @@ const FacebookLeadsListInner = (
       'no-contest': 'No contestó',
       'appointment': 'Cita agendada',
       'recontact': 'Por recontactar',
-      'estimated-sold': 'Estimado vendido',
-      'work-completed': 'Trabajo terminado',
+      'estimated-sold': 'Vendido',
+      'work-completed': 'Servicio completado',
     };
     return statusMap[status] || status;
   };
@@ -1554,7 +1836,7 @@ const FacebookLeadsListInner = (
       'appointment': '#fb923c', // Naranja
       'recontact': '#60a5fa', // Azul
       'estimated-sold': '#34d399', // Verde
-      'work-completed': '#818cf8', // Índigo
+      'work-completed': '#4ade80', // Verde claro (mismo que el botón)
     };
     return statusColorMap[status] || colors.textSecondary;
   };
@@ -1565,8 +1847,8 @@ const FacebookLeadsListInner = (
       'no-contest': 'No contesto', // Sin tilde, exactamente como el backend espera
       'appointment': 'Cita Agendada', // Con mayúscula A
       'recontact': 'Por recontactar', // Con minúscula r (como el backend espera)
-      'estimated-sold': 'Estimado vendido',
-      'work-completed': 'Trabajo terminado',
+      'estimated-sold': 'Vendido',
+      'work-completed': 'Servicio completado',
     };
     const mappedStatus = statusMap[status];
     if (!mappedStatus) {
@@ -1616,14 +1898,14 @@ const FacebookLeadsListInner = (
         // Hay valores guardados, actualizar el estado sin abrir el modal
         console.log('🔵 handleClientStatusOption: Hay valores guardados, actualizando estado sin modal');
         console.log('🔵 handleClientStatusOption: Intentando llamar al backend...');
-        Alert.alert('Info', `Se detectaron valores existentes. Actualizando estado a: ${status}`);
         try {
           const backendStatus = mapStatusToBackend(status);
           console.log('🔵 handleClientStatusOption: backendStatus mapeado:', backendStatus);
           
           if (!backendStatus || backendStatus === 'undefined') {
             console.error('❌ handleClientStatusOption: backendStatus es undefined o inválido');
-            Alert.alert('Error', 'No se pudo determinar el estado del cliente');
+            setErrorMessage('No se pudo determinar el estado del cliente');
+            setTimeout(() => setErrorMessage(null), 5000);
             setUpdatingStatusKey(null);
             return;
           }
@@ -1668,7 +1950,8 @@ const FacebookLeadsListInner = (
           } else if (error?.message) {
             errorMessage = error.message;
           }
-          Alert.alert('Error', errorMessage);
+          setErrorMessage(errorMessage);
+          setTimeout(() => setErrorMessage(null), 5000);
           setUpdatingStatusKey(null);
         }
       } else {
@@ -1705,7 +1988,8 @@ const FacebookLeadsListInner = (
         // Validar que backendStatus no sea undefined
         if (!backendStatus || backendStatus === 'undefined') {
           console.error('❌ handleClientStatusOption: backendStatus es undefined o inválido');
-          Alert.alert('Error', 'No se pudo determinar el estado del cliente');
+          setErrorMessage('No se pudo determinar el estado del cliente');
+          setTimeout(() => setErrorMessage(null), 5000);
           setUpdatingStatusKey(null);
           return;
         }
@@ -1766,11 +2050,8 @@ const FacebookLeadsListInner = (
           errorMessage = error.message;
         }
         
-        Alert.alert(
-          'Error',
-          errorMessage,
-          [{ text: 'OK' }]
-        );
+        setErrorMessage(errorMessage);
+        setTimeout(() => setErrorMessage(null), 5000);
         // Cerrar el menú de info de estado (donde están los botones) en caso de error
         if (expandedClientStatusInfo === leadId && clientStatusInfoHeights.current[leadId]) {
           Animated.timing(clientStatusInfoHeights.current[leadId], {
@@ -1860,7 +2141,8 @@ const FacebookLeadsListInner = (
       } else if (error?.message) {
         errorMessage = error.message;
       }
-      Alert.alert('Error', errorMessage);
+      setErrorMessage(errorMessage);
+      setTimeout(() => setErrorMessage(null), 5000);
     }
   };
 
@@ -1873,13 +2155,15 @@ const FacebookLeadsListInner = (
     
     if (!selectedTime) {
       console.warn('⚠️ handleSaveDateTime: No hay hora seleccionada');
-      Alert.alert('Hora requerida', 'Por favor selecciona una hora para continuar');
+      setErrorMessage('Por favor selecciona una hora para continuar');
+      setTimeout(() => setErrorMessage(null), 5000);
       return;
     }
     
     if (!modalLeadId || !dateTimeModalType) {
       console.error('❌ handleSaveDateTime: Faltan datos requeridos');
-      Alert.alert('Error', 'No se pudo identificar el lead');
+      setErrorMessage('No se pudo identificar el lead');
+      setTimeout(() => setErrorMessage(null), 5000);
       return;
     }
 
@@ -1981,17 +2265,15 @@ const FacebookLeadsListInner = (
         errorMessage = error.message;
       }
       
-      Alert.alert(
-        'Error',
-        errorMessage,
-        [{ text: 'OK' }]
-      );
+      setErrorMessage(errorMessage);
+      setTimeout(() => setErrorMessage(null), 5000);
     }
   };
 
   const handleSaveWithoutDate = async () => {
     if (!modalLeadId || !dateTimeModalType) {
-      Alert.alert('Error', 'No se pudo identificar el lead');
+      setErrorMessage('No se pudo identificar el lead');
+      setTimeout(() => setErrorMessage(null), 5000);
       return;
     }
 
@@ -2041,11 +2323,8 @@ const FacebookLeadsListInner = (
         errorMessage = error.message;
       }
       
-      Alert.alert(
-        'Error',
-        errorMessage,
-        [{ text: 'OK' }]
-      );
+      setErrorMessage(errorMessage);
+      setTimeout(() => setErrorMessage(null), 5000);
     }
   };
 
@@ -2074,13 +2353,8 @@ const FacebookLeadsListInner = (
       // Llamar al endpoint para enviar la solicitud de review
       const result = await facebookLeadsService.sendReviewRequest(reviewConfirmationLeadId);
       
-      Alert.alert(
-        'Éxito',
-        result.message || 'La solicitud de review ha sido enviada al cliente exitosamente',
-        [
-          { text: 'OK', onPress: () => closeMenu(reviewConfirmationLeadId) },
-        ]
-      );
+      // Solicitud de review enviada exitosamente
+      closeMenu(reviewConfirmationLeadId);
     } catch (error: any) {
       // Manejar diferentes tipos de errores
       let errorMessage = 'No se pudo enviar la solicitud de review';
@@ -2107,7 +2381,8 @@ const FacebookLeadsListInner = (
         errorMessage = error.message || errorMessage;
       }
       
-      Alert.alert('Error', errorMessage);
+      setErrorMessage(errorMessage);
+      setTimeout(() => setErrorMessage(null), 5000);
     } finally {
       setRequestingReview(null);
       setReviewConfirmationLeadId(null);
@@ -2115,37 +2390,26 @@ const FacebookLeadsListInner = (
   };
 
   const handleDelete = async (id: number) => {
-    Alert.alert(
-      'Confirmar eliminación',
-      '¿Estás seguro de eliminar este lead?',
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        {
-          text: 'Eliminar',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await deleteLead(id);
-              if (isSearching && debouncedSearchQuery && clientId) {
-                // Refrescar búsqueda
-                const response = await facebookLeadsService.searchMyLeads(
-                  debouncedSearchQuery,
-                  clientId,
-                  searchPage,
-                  limit
-                );
-                setSearchLeads(response.data);
-                setSearchPagination(response.pagination);
-              } else {
-                refetch();
-              }
-            } catch (err) {
-              Alert.alert('Error', 'Error al eliminar lead');
-            }
-          },
-        },
-      ]
-    );
+    // Eliminar directamente sin confirmación
+    try {
+      await deleteLead(id);
+      if (isSearching && debouncedSearchQuery && clientId) {
+        // Refrescar búsqueda
+        const response = await facebookLeadsService.searchMyLeads(
+          debouncedSearchQuery,
+          clientId,
+          searchPage,
+          limit
+        );
+        setSearchLeads(response.data);
+        setSearchPagination(response.pagination);
+      } else {
+        refetch();
+      }
+    } catch (err) {
+      setErrorMessage('Error al eliminar lead');
+      setTimeout(() => setErrorMessage(null), 5000);
+    }
   };
 
   const formatDate = (dateString: string) => {
@@ -2199,11 +2463,13 @@ const FacebookLeadsListInner = (
 
   return (
     <View style={styles.container}>
-
       {/* Barra de búsqueda y botón nuevo solo se muestran si no vienen desde el header */}
       {externalSearchQuery === undefined && (
         <View style={styles.searchRow}>
-          <View style={styles.searchContainer}>
+          <View style={[
+            styles.searchContainer,
+            searchInputFocused && Platform.OS === 'web' && styles.searchContainerFocused
+          ]}>
             <Ionicons name="search-outline" size={20} color={colors.textSecondary} style={styles.searchIcon} />
             <TextInput
               style={styles.searchInput}
@@ -2211,13 +2477,17 @@ const FacebookLeadsListInner = (
               placeholderTextColor={colors.textTertiary}
               value={searchQuery}
               onChangeText={setSearchQuery}
+              onFocus={() => setSearchInputFocused(true)}
+              onBlur={() => setSearchInputFocused(false)}
               autoCapitalize="none"
               autoCorrect={false}
               textAlignVertical="center"
               {...(Platform.OS === 'android' && { includeFontPadding: false })}
-              {...(Platform.OS === 'web' && { 
+              {...(Platform.OS === 'web' && {
                 // @ts-ignore - web only property
-                // outlineStyle removed - not supported in React Native
+                outlineStyle: 'none',
+                outlineWidth: 0,
+                id: 'search-input',
               })}
             />
             {searchQuery.length > 0 && (
@@ -2280,7 +2550,7 @@ const FacebookLeadsListInner = (
                       console.log('📋 [COPY] Usando navigator.clipboard.writeText');
                       await navigator.clipboard.writeText(allLogs);
                       console.log('✅ [COPY] Copiado exitosamente (navigator.clipboard)');
-                      Alert.alert('✅ Copiado', 'Todos los logs se han copiado al portapapeles');
+                      // Logs copiados silenciosamente
                     } else {
                       console.log('📋 [COPY] Usando fallback document.execCommand');
                       // Fallback para navegadores antiguos
@@ -2294,10 +2564,11 @@ const FacebookLeadsListInner = (
                       document.body.removeChild(textArea);
                       if (success) {
                         console.log('✅ [COPY] Copiado exitosamente (execCommand)');
-                        Alert.alert('✅ Copiado', 'Todos los logs se han copiado al portapapeles');
+                        // Logs copiados silenciosamente
                       } else {
                         console.error('❌ [COPY] execCommand falló');
-                        Alert.alert('Error', 'No se pudo copiar. Selecciona el texto manualmente.');
+                        setErrorMessage('No se pudo copiar. Selecciona el texto manualmente.');
+                        setTimeout(() => setErrorMessage(null), 5000);
                       }
                     }
                   } else {
@@ -2313,22 +2584,25 @@ const FacebookLeadsListInner = (
                         try {
                           await Clipboard.setStringAsync(allLogs);
                           console.log('✅ [COPY] Copiado exitosamente (setStringAsync)');
-                          Alert.alert('✅ Copiado', 'Todos los logs se han copiado al portapapeles');
+                          // Logs copiados silenciosamente
                         } catch (setStringAsyncError: any) {
                           console.error('❌ [COPY] Error en setStringAsync:', setStringAsyncError);
                           console.error('❌ [COPY] Error message:', setStringAsyncError?.message);
                           console.error('❌ [COPY] Error stack:', setStringAsyncError?.stack);
-                          Alert.alert('Error', `No se pudo copiar: ${setStringAsyncError?.message || 'Error desconocido'}`);
+                          setErrorMessage(`No se pudo copiar: ${setStringAsyncError?.message || 'Error desconocido'}`);
+                          setTimeout(() => setErrorMessage(null), 5000);
                         }
                       } else {
                         console.error('❌ [COPY] Clipboard no tiene setStringAsync');
                         console.error('❌ [COPY] Clipboard object:', JSON.stringify(Object.keys(Clipboard || {})));
-                        Alert.alert('Error', 'Clipboard no tiene métodos disponibles. Selecciona el texto manualmente.');
+                        setErrorMessage('Clipboard no tiene métodos disponibles. Selecciona el texto manualmente.');
+                        setTimeout(() => setErrorMessage(null), 5000);
                       }
                     } else {
                       console.error('❌ [COPY] Clipboard no está disponible');
                       console.error('❌ [COPY] Intentó cargar expo-clipboard pero falló');
-                      Alert.alert('Error', 'Clipboard no disponible. Instala expo-clipboard.');
+                      setErrorMessage('Clipboard no disponible. Instala expo-clipboard.');
+                      setTimeout(() => setErrorMessage(null), 5000);
                     }
                   }
                 } catch (error: any) {
@@ -2338,7 +2612,8 @@ const FacebookLeadsListInner = (
                   console.error('❌ [COPY] Error stack:', error?.stack);
                   console.error('❌ [COPY] Error name:', error?.name);
                   console.error('❌ [COPY] Error code:', error?.code);
-                  Alert.alert('Error', `No se pudo copiar los logs: ${error?.message || 'Error desconocido'}`);
+                  setErrorMessage(`No se pudo copiar los logs: ${error?.message || 'Error desconocido'}`);
+                  setTimeout(() => setErrorMessage(null), 5000);
                 }
               }}
               style={styles.debugCopyButton}
@@ -2353,20 +2628,12 @@ const FacebookLeadsListInner = (
                   setTestFilterId(61);
                   addLog('🧪 [TEST] Activando filtro de prueba con leadId=61');
                   addLog('🧪 [TEST] Esto debería activar el filtrado en displayLeads');
-                  Alert.alert(
-                    '🧪 Test de Filtro Activado',
-                    'Filtro de prueba activado con leadId=61\n\nRevisa los logs para ver qué sucede con el filtrado.',
-                    [{ text: 'OK' }]
-                  );
+                  // Filtro de prueba activado
                 } else {
                   // Desactivar filtro de prueba
                   setTestFilterId(undefined);
                   addLog('🧪 [TEST] Desactivando filtro de prueba');
-                  Alert.alert(
-                    '🧪 Test de Filtro Desactivado',
-                    'Filtro de prueba desactivado.\n\nAhora se mostrarán todos los leads.',
-                    [{ text: 'OK' }]
-                  );
+                  // Filtro de prueba desactivado
                 }
               }}
               style={[styles.debugFilterButton, testFilterId !== undefined && { backgroundColor: colors.primary + '30' }]}
@@ -2391,6 +2658,19 @@ const FacebookLeadsListInner = (
           ))}
         </ScrollView>
       </View>
+      )}
+
+      {errorMessage && (
+        <View style={styles.errorMessageContainer}>
+          <Ionicons name="alert-circle-outline" size={18} color={colors.error} />
+          <Text style={styles.errorMessageText}>{errorMessage}</Text>
+          <TouchableOpacity 
+            onPress={() => setErrorMessage(null)}
+            style={styles.errorCloseButton}
+          >
+            <Ionicons name="close" size={18} color={colors.error} />
+          </TouchableOpacity>
+        </View>
       )}
 
       {isSearching && displayError && (
@@ -2420,6 +2700,45 @@ const FacebookLeadsListInner = (
         }
       >
         <Animated.View style={{ paddingTop: topPaddingAnim }}>
+        {/* Filtro por estado de cliente - arriba de los leads */}
+        <View style={styles.filterContainer}>
+          <TouchableOpacity
+            style={[
+              styles.actionButton,
+              styles.filterStatusButton,
+              {
+                backgroundColor: clientStatusFilter !== 'all' 
+                  ? getStatusColor(clientStatusFilter) 
+                  : colors.backgroundTertiary,
+              }
+            ]}
+            onPress={() => setShowStatusFilterModal(true)}
+            activeOpacity={0.7}
+          >
+            <Ionicons 
+              name="filter-outline" 
+              size={20} 
+              color={clientStatusFilter !== 'all' ? '#fff' : colors.primary} 
+            />
+            <Text style={[
+              styles.actionButtonText,
+              { color: clientStatusFilter !== 'all' ? '#fff' : colors.textPrimary }
+            ]}>
+              {clientStatusFilter === 'all' ? 'Todos los estados' :
+               clientStatusFilter === 'no-contest' ? 'No contestó' :
+               clientStatusFilter === 'appointment' ? 'Cita agendada' :
+               clientStatusFilter === 'recontact' ? 'Por recontactar' :
+               clientStatusFilter === 'estimated-sold' ? 'Vendido' :
+               clientStatusFilter === 'work-completed' ? 'Servicio completado' : 'Todos los estados'}
+            </Text>
+            <Ionicons 
+              name={showStatusFilterModal ? "chevron-up-outline" : "chevron-down-outline"} 
+              size={18} 
+              color={clientStatusFilter !== 'all' ? '#fff' : colors.primary} 
+            />
+          </TouchableOpacity>
+        </View>
+
         {displayLeads.length === 0 && !displayLoading ? (
           <View style={styles.emptyContainer}>
             <Ionicons 
@@ -2438,7 +2757,7 @@ const FacebookLeadsListInner = (
           </View>
         ) : (
           <View style={[styles.leadsGrid, getColumnsCount > 1 && { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-start' }]}>
-          {displayLeads.map((lead) => {
+          {paginatedDisplayLeads.map((lead) => {
             const isExpanded = expandedLeadId === lead.id;
             if (!animatedHeights.current[lead.id]) {
               animatedHeights.current[lead.id] = new Animated.Value(0);
@@ -2758,11 +3077,11 @@ const FacebookLeadsListInner = (
                         'Cita agendada': 'appointment',
                         'Por recontactar': 'recontact',
                         'Por Recontactar': 'recontact', // También mapear con mayúscula
-                        'Estimado vendido': 'estimated-sold',
-                        'Trabajo terminado': 'work-completed',
+                        'Vendido': 'estimated-sold',
+                        'Servicio completado': 'work-completed',
                       };
                       return backendToFrontend[lead.clientStatus] || lead.clientStatus;
-                    })() : 'appointment');
+                    })() : null);
                     const statusColor = getStatusColor(currentStatus);
                     const statusLabel = currentStatus ? getStatusLabel(currentStatus) : 'Estado del cliente';
                     const buttonText = currentStatus ? statusLabel : 'Estado del cliente';
@@ -2815,8 +3134,8 @@ const FacebookLeadsListInner = (
                         'Cita agendada': 'appointment',
                         'Por recontactar': 'recontact',
                         'Por Recontactar': 'recontact',
-                        'Estimado vendido': 'estimated-sold',
-                        'Trabajo terminado': 'work-completed',
+                        'Vendido': 'estimated-sold',
+                        'Servicio completado': 'work-completed',
                       };
                       return backendToFrontend[lead.clientStatus] || lead.clientStatus;
                     })() : null);
@@ -3028,8 +3347,8 @@ const FacebookLeadsListInner = (
                         'Cita Agendada': 'appointment',
                         'Cita agendada': 'appointment',
                         'Por recontactar': 'recontact',
-                        'Estimado vendido': 'estimated-sold',
-                        'Trabajo terminado': 'work-completed',
+                        'Vendido': 'estimated-sold',
+                        'Servicio completado': 'work-completed',
                       };
                       return backendToFrontend[lead.clientStatus] || lead.clientStatus;
                     })() : null);
@@ -3121,11 +3440,11 @@ const FacebookLeadsListInner = (
                   // Cada menuItem tiene ~44px (paddingVertical 12*2 + contenido ~20)
                   // gap entre items es 8px (definido en quickResponseContent)
                   // 4 opciones * 44px = 176px + 3 gaps * 8px = 24px = 200px
-                  // Agregamos un poco más de espacio para que se vea mejor
+                  // Agregamos más espacio extra para asegurar que todas las opciones quepan, especialmente "Servicio completado"
                   const maxOptions = 4; // Máximo de opciones que se pueden mostrar
                   const menuItemHeight = 44;
                   const gapSize = 8;
-                  const calculatedHeight = (maxOptions * menuItemHeight) + ((maxOptions - 1) * gapSize) + 16; // +16px extra
+                  const calculatedHeight = (maxOptions * menuItemHeight) + ((maxOptions - 1) * gapSize) + 50; // +50px extra para asegurar que quepa todo, incluyendo "Servicio completado"
                   
                   const statusHeight = clientStatusInfoHeights.current[lead.id].interpolate({
                     inputRange: [0, 1],
@@ -3141,7 +3460,7 @@ const FacebookLeadsListInner = (
                         marginTop: 8,
                       }}
                     >
-                      <View style={styles.quickResponseContent}>
+                      <View style={[styles.quickResponseContent, { paddingBottom: 8 }]}>
                         {(() => {
                           const currentStatus = clientStatuses[lead.id] || (lead.clientStatus ? (() => {
                             const backendToFrontend: { [key: string]: string } = {
@@ -3149,18 +3468,18 @@ const FacebookLeadsListInner = (
                               'Cita Agendada': 'appointment',
                               'Cita agendada': 'appointment',
                               'Por recontactar': 'recontact',
-                              'Estimado vendido': 'estimated-sold',
-                              'Trabajo terminado': 'work-completed',
+                              'Vendido': 'estimated-sold',
+                              'Servicio completado': 'work-completed',
                             };
                             return backendToFrontend[lead.clientStatus] || lead.clientStatus;
-                          })() : 'appointment');
+                          })() : null);
                           
                           const statusOptions = [
                             { key: 'no-contest', label: 'No contestó', style: styles.statusButtonNoContest },
                             { key: 'appointment', label: 'Cita agendada', style: styles.statusButtonAppointment },
                             { key: 'recontact', label: 'Por recontactar', style: styles.statusButtonRecontact },
-                            { key: 'estimated-sold', label: 'Estimado vendido', style: styles.statusButtonEstimatedSold },
-                            { key: 'work-completed', label: 'Trabajo terminado', style: styles.statusButtonWorkCompleted },
+                            { key: 'estimated-sold', label: 'Vendido', style: styles.statusButtonEstimatedSold },
+                            { key: 'work-completed', label: 'Servicio completado', style: styles.statusButtonWorkCompleted },
                           ];
                           
                           // Filtrar el estado actual
@@ -3736,6 +4055,100 @@ const FacebookLeadsListInner = (
         </View>
       </Modal>
 
+      {/* Modal de filtro de estado de cliente */}
+      <Modal
+        visible={showStatusFilterModal}
+        transparent={true}
+        animationType={Platform.OS === 'web' ? 'fade' : 'slide'}
+        onRequestClose={() => setShowStatusFilterModal(false)}
+      >
+        <TouchableOpacity
+          style={styles.statusFilterModalOverlay}
+          activeOpacity={1}
+          onPress={() => setShowStatusFilterModal(false)}
+        >
+          <View 
+            style={styles.statusFilterModalContainer}
+            onStartShouldSetResponder={() => true}
+          >
+            <View style={styles.statusFilterModalHeader}>
+              <Text style={styles.statusFilterModalTitle}>Filtrar por estado</Text>
+              <TouchableOpacity
+                onPress={() => setShowStatusFilterModal(false)}
+                style={styles.statusFilterModalCloseButton}
+              >
+                <Ionicons name="close" size={24} color={colors.textPrimary} />
+              </TouchableOpacity>
+            </View>
+            <ScrollView style={styles.statusFilterModalOptions}>
+              {[
+                { value: 'all', label: 'Todos los estados' },
+                { value: 'no-contest', label: 'No contestó' },
+                { value: 'appointment', label: 'Cita agendada' },
+                { value: 'recontact', label: 'Por recontactar' },
+                { value: 'estimated-sold', label: 'Vendido' },
+                { value: 'work-completed', label: 'Servicio completado' },
+              ].map((option) => (
+                <TouchableOpacity
+                  key={option.value}
+                  style={[
+                    styles.statusFilterOption,
+                    clientStatusFilter === option.value && styles.statusFilterOptionSelected
+                  ]}
+                  onPress={() => {
+                    onClientStatusFilterChange?.(option.value);
+                    setShowStatusFilterModal(false);
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <Text style={[
+                    styles.statusFilterOptionText,
+                    clientStatusFilter === option.value && styles.statusFilterOptionTextSelected
+                  ]}>
+                    {option.label}
+                  </Text>
+                  {clientStatusFilter === option.value && (
+                    <Ionicons name="checkmark" size={20} color={colors.primary} />
+                  )}
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* Toast de notificación - Usando Modal para que aparezca por encima de todo */}
+      <Modal
+        visible={toastVisible}
+        transparent={true}
+        animationType="none"
+        onRequestClose={() => {}}
+      >
+        <View style={styles.toastModalContainer}>
+          <Animated.View
+            style={[
+              styles.toastContainer,
+              {
+                opacity: toastOpacity,
+                transform: [
+                  {
+                    translateY: toastOpacity.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: [-50, 0],
+                    }),
+                  },
+                ],
+              },
+            ]}
+          >
+            <View style={styles.toastContent}>
+              <Ionicons name="checkmark-circle" size={24} color="#ffffff" />
+              <Text style={styles.toastText}>{toastMessage}</Text>
+            </View>
+          </Animated.View>
+        </View>
+      </Modal>
+
     </View>
   );
 };
@@ -3779,6 +4192,16 @@ const styles = StyleSheet.create({
     minHeight: 44,
     flex: 0.6,
     overflow: 'hidden',
+    ...(Platform.OS === 'web' && {
+      outlineStyle: 'none',
+      outlineWidth: 0,
+    }),
+  },
+  searchContainerFocused: {
+    ...(Platform.OS === 'web' && {
+      borderColor: colors.primary,
+      boxShadow: `0 0 0 3px ${colors.primary}20`,
+    }),
   },
   searchIcon: {
     marginRight: 8,
@@ -3793,6 +4216,12 @@ const styles = StyleSheet.create({
     paddingBottom: Platform.OS === 'android' ? 12 : 10,
     minWidth: 0,
     width: '100%',
+    ...(Platform.OS === 'web' && {
+      outlineStyle: 'none',
+      outlineWidth: 0,
+      borderWidth: 0,
+      backgroundColor: 'transparent',
+    }),
   },
   clearButton: {
     padding: 4,
@@ -3825,6 +4254,28 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '500',
     flex: 1,
+  },
+  errorMessageContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: colors.error + '10',
+    borderColor: colors.error + '30',
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 12,
+    marginHorizontal: 16,
+    marginTop: 12,
+    marginBottom: 12,
+  },
+  errorMessageText: {
+    color: colors.error,
+    fontSize: 14,
+    fontWeight: '500',
+    flex: 1,
+  },
+  errorCloseButton: {
+    padding: 4,
   },
   searchLoading: {
     marginLeft: 8,
@@ -4173,6 +4624,69 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     color: colors.textPrimary,
   },
+  filterContainer: {
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    backgroundColor: colors.background,
+  },
+  filterStatusButton: {
+    width: '100%',
+  },
+  statusFilterModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: Platform.OS === 'web' ? 'center' : 'flex-end',
+    alignItems: Platform.OS === 'web' ? 'center' : 'stretch',
+    padding: Platform.OS === 'web' ? 20 : 0,
+  },
+  statusFilterModalContainer: {
+    backgroundColor: colors.backgroundSecondary,
+    borderRadius: Platform.OS === 'web' ? 16 : 20,
+    borderTopLeftRadius: Platform.OS === 'web' ? 16 : 20,
+    borderTopRightRadius: Platform.OS === 'web' ? 16 : 20,
+    maxHeight: Platform.OS === 'web' ? '80%' : '70%',
+    width: Platform.OS === 'web' ? 400 : '100%',
+    paddingBottom: Platform.OS === 'ios' ? 34 : Platform.OS === 'android' ? 70 : 20,
+  },
+  statusFilterModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  statusFilterModalTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: colors.textPrimary,
+  },
+  statusFilterModalCloseButton: {
+    padding: 4,
+  },
+  statusFilterModalOptions: {
+    maxHeight: 400,
+  },
+  statusFilterOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.borderLight,
+  },
+  statusFilterOptionSelected: {
+    backgroundColor: colors.primary + '10',
+  },
+  statusFilterOptionText: {
+    fontSize: 16,
+    color: colors.textPrimary,
+    fontWeight: '500',
+  },
+  statusFilterOptionTextSelected: {
+    color: colors.primary,
+    fontWeight: '600',
+  },
   emptyContainer: {
     padding: 60,
     alignItems: 'center',
@@ -4443,7 +4957,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#6ee7b7', // Verde medio
   },
   statusButtonWorkCompleted: {
-    backgroundColor: '#a5b4fc', // Índigo/Morado medio
+    backgroundColor: '#4ade80', // Verde claro y positivo
   },
   newButton: {
     flexDirection: 'row',
@@ -4465,5 +4979,39 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     fontSize: 13,
     letterSpacing: 0.3,
+  },
+  toastModalContainer: {
+    flex: 1,
+    justifyContent: 'flex-start',
+    alignItems: 'center',
+    backgroundColor: 'transparent',
+    pointerEvents: 'none',
+    paddingTop: Platform.OS === 'web' ? 80 : 60,
+  },
+  toastContainer: {
+    alignItems: 'center',
+    pointerEvents: 'none',
+  },
+  toastContent: {
+    backgroundColor: colors.primary,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+    paddingVertical: 14,
+    borderRadius: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
+    gap: 12,
+    minWidth: 280,
+    maxWidth: '92%',
+  },
+  toastText: {
+    color: '#ffffff',
+    fontSize: 15,
+    fontWeight: '600',
   },
 });

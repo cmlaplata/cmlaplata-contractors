@@ -15,10 +15,11 @@
   "dependencies": {
     "@expo/metro-runtime": "~6.1.2",
     "@react-native-async-storage/async-storage": "^2.2.0",
-    "@react-native-community/datetimepicker": "^8.5.1",
+    "@react-native-community/datetimepicker": "8.4.4",
     "axios": "^1.13.2",
     "expo": "~54.0.27",
     "expo-clipboard": "^8.0.8",
+    "expo-constants": "~18.0.12",
     "expo-linking": "~8.0.11",
     "expo-router": "~6.0.19",
     "expo-status-bar": "~3.0.9",

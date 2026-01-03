@@ -50,6 +50,10 @@ fastlane/test_output
 dist/
 web-build/
 
+# Prebuild - Native folders (managed by Expo)
+# /android - Comentado para permitir que EAS use la carpeta local
+/ios
+
 # Environment variables
 .env
 .env.local

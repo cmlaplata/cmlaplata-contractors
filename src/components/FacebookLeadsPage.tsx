@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { View, StyleSheet, TouchableOpacity, Text, Alert, ActivityIndicator, Modal, Platform, ScrollView, Image, Linking, TextInput } from 'react-native';
+import { View, StyleSheet, TouchableOpacity, Text, ActivityIndicator, Modal, Platform, ScrollView, Image, Linking, TextInput, Animated } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { FacebookLeadsList, FacebookLeadsListRef } from './FacebookLeadsList';
 import { LeadForm } from './LeadForm';
@@ -29,7 +29,11 @@ export const FacebookLeadsPage: React.FC<FacebookLeadsPageProps> = ({ leadId }) 
   const [showNotificationsModal, setShowNotificationsModal] = useState(false);
   const [showMessagesModal, setShowMessagesModal] = useState(false);
   const [messagesInstructions, setMessagesInstructions] = useState('');
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const listRef = useRef<FacebookLeadsListRef>(null);
+  const [toastVisible, setToastVisible] = useState(false);
+  const [toastMessage, setToastMessage] = useState('');
+  const toastOpacity = useRef(new Animated.Value(0)).current;
   const { user, logout } = useAuth();
   const router = useRouter();
   const { addLog } = useDebugLog();
@@ -68,6 +72,13 @@ export const FacebookLeadsPage: React.FC<FacebookLeadsPageProps> = ({ leadId }) 
     setMessagesInstructions(aiMessageInstructions);
   }, [aiMessageInstructions]);
 
+  // Monitorear cambios en el estado del toast
+  useEffect(() => {
+    console.log('📢 FacebookLeadsPage - toastVisible cambió a:', toastVisible);
+    console.log('📢 FacebookLeadsPage - toastMessage:', toastMessage);
+    console.log('📢 FacebookLeadsPage - toastOpacity value:', toastOpacity);
+  }, [toastVisible, toastMessage]);
+
   // Deep links se manejan en [...unmatched].tsx y AuthGuard.tsx
   // Este componente solo recibe el leadId como prop desde dashboard.tsx
 
@@ -81,18 +92,67 @@ export const FacebookLeadsPage: React.FC<FacebookLeadsPageProps> = ({ leadId }) 
     setShowForm(true);
   };
 
-  const handleFormSuccess = () => {
-    setShowForm(false);
-    setEditingLead(null);
-    if (listRef.current) {
+  const [shouldRefetch, setShouldRefetch] = useState(false);
+
+  // Refrescar cuando showForm cambia de true a false y shouldRefetch es true
+  useEffect(() => {
+    if (!showForm && shouldRefetch && listRef.current) {
+      console.log('🔄 FacebookLeadsPage - showForm es false, listRef existe, llamando refetch()');
       listRef.current.refetch();
+      setShouldRefetch(false);
+      console.log('✅ FacebookLeadsPage - refetch() completado');
     }
-    setRefreshKey((prev) => prev + 1);
+  }, [showForm, shouldRefetch]);
+
+  const handleFormSuccess = () => {
+    console.log('📞 FacebookLeadsPage.handleFormSuccess - Iniciando');
+    setShowForm(false);
+    console.log('📞 FacebookLeadsPage.handleFormSuccess - showForm establecido a false');
+    setEditingLead(null);
+    console.log('📞 FacebookLeadsPage.handleFormSuccess - editingLead establecido a null');
+    setShouldRefetch(true);
+    console.log('📞 FacebookLeadsPage.handleFormSuccess - shouldRefetch establecido a true');
+    setRefreshKey((prev) => {
+      const newKey = prev + 1;
+      console.log('📞 FacebookLeadsPage.handleFormSuccess - refreshKey actualizado:', newKey);
+      return newKey;
+    });
+    console.log('✅ FacebookLeadsPage.handleFormSuccess - Completado (refetch se ejecutará cuando el componente se monte)');
   };
 
   const handleFormCancel = () => {
     setShowForm(false);
     setEditingLead(null);
+  };
+
+  const showToast = (message: string) => {
+    console.log('📢 FacebookLeadsPage.showToast - Iniciando');
+    console.log('📢 FacebookLeadsPage.showToast - Mensaje:', message);
+    console.log('📢 FacebookLeadsPage.showToast - toastVisible antes:', toastVisible);
+    setToastMessage(message);
+    console.log('📢 FacebookLeadsPage.showToast - toastMessage establecido a:', message);
+    setToastVisible(true);
+    console.log('📢 FacebookLeadsPage.showToast - toastVisible establecido a true');
+    
+    // Resetear la animación
+    toastOpacity.setValue(0);
+    
+    Animated.sequence([
+      Animated.timing(toastOpacity, {
+        toValue: 1,
+        duration: 300,
+        useNativeDriver: true,
+      }),
+      Animated.delay(2000),
+      Animated.timing(toastOpacity, {
+        toValue: 0,
+        duration: 300,
+        useNativeDriver: true,
+      }),
+    ]).start(() => {
+      console.log('📢 FacebookLeadsPage.showToast - Animación completada, ocultando toast');
+      setToastVisible(false);
+    });
   };
 
   const handleLogout = () => {
@@ -111,7 +171,8 @@ export const FacebookLeadsPage: React.FC<FacebookLeadsPageProps> = ({ leadId }) 
     } catch (error) {
       console.error('❌ Error al cerrar sesión:', error);
       setShowLogoutModal(false);
-      Alert.alert('Error', 'No se pudo cerrar sesión. Por favor, intenta nuevamente.');
+      setErrorMessage('No se pudo cerrar sesión. Por favor, intenta nuevamente.');
+      setTimeout(() => setErrorMessage(null), 5000);
     }
   };
 
@@ -120,9 +181,22 @@ export const FacebookLeadsPage: React.FC<FacebookLeadsPageProps> = ({ leadId }) 
   };
 
   const [searchQuery, setSearchQuery] = useState('');
+  const [clientStatusFilter, setClientStatusFilter] = useState<string>('all');
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
+      {errorMessage && (
+        <View style={styles.errorMessageContainer}>
+          <Ionicons name="alert-circle-outline" size={18} color={colors.error} />
+          <Text style={styles.errorMessageText}>{errorMessage}</Text>
+          <TouchableOpacity 
+            onPress={() => setErrorMessage(null)}
+            style={styles.errorCloseButton}
+          >
+            <Ionicons name="close" size={18} color={colors.error} />
+          </TouchableOpacity>
+        </View>
+      )}
       {/* Header con barra de búsqueda y botón agregar */}
       <View style={styles.newHeader}>
         <View style={styles.searchContainer}>
@@ -175,7 +249,6 @@ export const FacebookLeadsPage: React.FC<FacebookLeadsPageProps> = ({ leadId }) 
         )}
       </View>
 
-
       {showForm ? (
         <LeadForm
           lead={editingLead}
@@ -189,6 +262,8 @@ export const FacebookLeadsPage: React.FC<FacebookLeadsPageProps> = ({ leadId }) 
           onNew={handleNew} 
           filterLeadId={leadId} 
           searchQuery={searchQuery}
+          clientStatusFilter={clientStatusFilter}
+          onClientStatusFilterChange={setClientStatusFilter}
           onViewAllContacts={() => router.replace('/(tabs)/dashboard')}
         />
       )}
@@ -210,6 +285,26 @@ export const FacebookLeadsPage: React.FC<FacebookLeadsPageProps> = ({ leadId }) 
           aiMessageInstructions={aiMessageInstructions}
           messagesUpdating={messagesUpdating}
           onOpenMessages={() => setShowMessagesModal(true)}
+          onOpenNotifications={() => setShowNotificationsModal(true)}
+          onUpdateMessagesCache={async () => {
+            console.log('📢 FacebookLeadsPage.onUpdateMessagesCache - INICIANDO');
+            console.log('📢 FacebookLeadsPage.onUpdateMessagesCache - listRef.current:', !!listRef.current);
+            try {
+              if (listRef.current) {
+                console.log('📢 FacebookLeadsPage.onUpdateMessagesCache - listRef.current existe, limpiando cache...');
+                await listRef.current.clearMessagesCache();
+                console.log('📢 FacebookLeadsPage.onUpdateMessagesCache - Cache limpiado, llamando showToast...');
+                showToast('App actualizada');
+                console.log('📢 FacebookLeadsPage.onUpdateMessagesCache - showToast llamado');
+              } else {
+                console.warn('⚠️ FacebookLeadsPage.onUpdateMessagesCache - listRef.current es null');
+              }
+            } catch (err) {
+              console.error('❌ FacebookLeadsPage.onUpdateMessagesCache - Error:', err);
+              setErrorMessage('No se pudo actualizar el cache de mensajes');
+              setTimeout(() => setErrorMessage(null), 5000);
+            }
+          }}
         />
       )}
 
@@ -276,6 +371,36 @@ export const FacebookLeadsPage: React.FC<FacebookLeadsPageProps> = ({ leadId }) 
                       Mensajes
                     </Text>
                   </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.menuItem}
+                    onPress={async () => {
+                      console.log('📢 FacebookLeadsPage - Menú desktop: Click en Actualizar');
+                      try {
+                        setShowUserMenu(false);
+                        if (listRef.current) {
+                          console.log('📢 FacebookLeadsPage - Menú desktop: Limpiando cache...');
+                          await listRef.current.clearMessagesCache();
+                          console.log('📢 FacebookLeadsPage - Menú desktop: Cache limpiado, llamando showToast...');
+                          showToast('App actualizada');
+                          console.log('📢 FacebookLeadsPage - Menú desktop: showToast llamado');
+                        }
+                      } catch (err) {
+                        console.error('❌ FacebookLeadsPage - Menú desktop: Error al actualizar cache:', err);
+                        setErrorMessage('No se pudo actualizar el cache de mensajes');
+                        setTimeout(() => setErrorMessage(null), 5000);
+                      }
+                    }}
+                    activeOpacity={0.7}
+                  >
+                    <Ionicons 
+                      name="refresh-outline" 
+                      size={20} 
+                      color="#fff" 
+                    />
+                    <Text style={[styles.menuItemText, { color: '#fff' }]}>
+                      Actualizar
+                    </Text>
+                  </TouchableOpacity>
                 </>
               )}
               <TouchableOpacity
@@ -303,9 +428,10 @@ export const FacebookLeadsPage: React.FC<FacebookLeadsPageProps> = ({ leadId }) 
           activeOpacity={1}
           onPress={() => setShowNotificationsModal(false)}
         >
-          <View 
+          <TouchableOpacity
             style={styles.notificationsModalContainer}
-            onStartShouldSetResponder={() => true}
+            activeOpacity={1}
+            onPress={(e) => e.stopPropagation()}
           >
             <View style={styles.notificationsModalHeader}>
               <Ionicons
@@ -365,7 +491,7 @@ export const FacebookLeadsPage: React.FC<FacebookLeadsPageProps> = ({ leadId }) 
                 </Text>
               </TouchableOpacity>
             </View>
-          </View>
+          </TouchableOpacity>
         </TouchableOpacity>
       </Modal>
 
@@ -468,11 +594,17 @@ export const FacebookLeadsPage: React.FC<FacebookLeadsPageProps> = ({ leadId }) 
                   try {
                     if (updateMessageInstructions) {
                       await updateMessageInstructions(messagesInstructions);
+                      // Borrar el cache de mensajes después de actualizar las instrucciones
+                      if (listRef.current) {
+                        await listRef.current.clearMessagesCache();
+                      }
                       setShowMessagesModal(false);
+                      // Instrucciones actualizadas y cache de mensajes limpiado
                     }
                   } catch (err) {
                     console.error('Error al actualizar instrucciones:', err);
-                    Alert.alert('Error', 'No se pudieron actualizar las instrucciones');
+                    setErrorMessage('No se pudieron actualizar las instrucciones');
+                    setTimeout(() => setErrorMessage(null), 5000);
                   }
                 }}
                 disabled={messagesUpdating}
@@ -485,6 +617,53 @@ export const FacebookLeadsPage: React.FC<FacebookLeadsPageProps> = ({ leadId }) 
             </View>
           </TouchableOpacity>
         </TouchableOpacity>
+      </Modal>
+
+      {/* Toast de notificación */}
+      {(() => {
+        console.log('📢 FacebookLeadsPage - Renderizando toast, toastVisible:', toastVisible, 'toastMessage:', toastMessage);
+        return null;
+      })()}
+      <Modal
+        visible={toastVisible}
+        transparent={true}
+        animationType="none"
+        onRequestClose={() => {
+          console.log('📢 FacebookLeadsPage - Modal onRequestClose llamado');
+        }}
+        statusBarTranslucent={true}
+        onShow={() => {
+          console.log('📢 FacebookLeadsPage - Modal onShow llamado, toastVisible:', toastVisible);
+        }}
+      >
+        {(() => {
+          console.log('📢 FacebookLeadsPage - Modal visible, renderizando contenido del toast');
+          return (
+            <View style={styles.toastModalContainer}>
+              <Animated.View
+                style={[
+                  styles.toastContainer,
+                  {
+                    opacity: toastOpacity,
+                    transform: [
+                      {
+                        translateY: toastOpacity.interpolate({
+                          inputRange: [0, 1],
+                          outputRange: [-50, 0],
+                        }),
+                      },
+                    ],
+                  },
+                ]}
+              >
+                <View style={styles.toastContent}>
+                  <Ionicons name="checkmark-circle" size={24} color="#ffffff" />
+                  <Text style={styles.toastText}>{toastMessage}</Text>
+                </View>
+              </Animated.View>
+            </View>
+          );
+        })()}
       </Modal>
     </SafeAreaView>
   );
@@ -832,6 +1011,48 @@ const styles = StyleSheet.create({
     marginBottom: 16,
     textAlign: 'center',
   },
+  toastModalContainer: {
+    flex: 1,
+    justifyContent: 'flex-start',
+    alignItems: 'center',
+    backgroundColor: 'transparent',
+    pointerEvents: 'none',
+    paddingTop: Platform.OS === 'web' ? 80 : 60,
+    zIndex: 9999,
+    ...(Platform.OS === 'web' && {
+      position: 'fixed',
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
+    }),
+  },
+  toastContainer: {
+    alignItems: 'center',
+    pointerEvents: 'none',
+  },
+  toastContent: {
+    backgroundColor: colors.primary,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+    paddingVertical: 14,
+    borderRadius: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
+    gap: 12,
+    minWidth: 280,
+    maxWidth: '92%',
+  },
+  toastText: {
+    color: '#ffffff',
+    fontSize: 15,
+    fontWeight: '600',
+  },
   messagesTextInput: {
     backgroundColor: colors.backgroundTertiary,
     borderRadius: 12,
@@ -844,5 +1065,27 @@ const styles = StyleSheet.create({
     maxHeight: 300,
     marginBottom: 24,
     textAlignVertical: 'top',
+  },
+  errorMessageContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: colors.error + '10',
+    borderColor: colors.error + '30',
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 12,
+    marginHorizontal: 16,
+    marginTop: 12,
+    marginBottom: 12,
+  },
+  errorMessageText: {
+    color: colors.error,
+    fontSize: 14,
+    fontWeight: '500',
+    flex: 1,
+  },
+  errorCloseButton: {
+    padding: 4,
   },
 });

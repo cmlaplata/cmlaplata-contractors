@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, ActivityIndicator, ScrollView, Platform } from 'react-native';
+import { View, Text, StyleSheet, TextInput, TouchableOpacity, ActivityIndicator, ScrollView, Platform, Image } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useAuth } from '../../src/context/AuthContext';
 import { Ionicons } from '@expo/vector-icons';
@@ -16,6 +16,7 @@ export default function LoginScreen() {
   const [codeSent, setCodeSent] = useState(false);
   const [requestingCode, setRequestingCode] = useState(false);
   const [verifyingCode, setVerifyingCode] = useState(false);
+  const [phoneInputFocused, setPhoneInputFocused] = useState(false);
   
   // Estados para login con contraseña
   const [email, setEmail] = useState('');
@@ -237,10 +238,21 @@ export default function LoginScreen() {
       keyboardShouldPersistTaps="handled"
     >
       <View style={styles.content}>
-        <Text style={styles.title}>Bienvenido</Text>
-        <Text style={styles.subtitle}>Inicia sesión para continuar</Text>
+        <View style={styles.headerSection}>
+          <View style={styles.titleContainer}>
+            <Image 
+              source={require('../../assets/logo.png')} 
+              style={styles.logo}
+              resizeMode="contain"
+            />
+            <Text style={styles.title}>Bienvenido</Text>
+          </View>
+        </View>
+        <View style={styles.bodySection}>
+          <Text style={styles.subtitle}>App solo para clientes de CM La Plata</Text>
+          <Text style={styles.subtitleSecondary}>Inicie sesión para continuar</Text>
 
-        {/* Pestañas */}
+          {/* Pestañas */}
         <View style={styles.tabsContainer}>
           <TouchableOpacity
             style={[styles.tab, activeTab === 'phone' && styles.tabActive]}
@@ -250,7 +262,7 @@ export default function LoginScreen() {
             <Ionicons 
               name="call-outline" 
               size={20} 
-              color={activeTab === 'phone' ? colors.primary : colors.textSecondary} 
+              color={activeTab === 'phone' ? '#ffffff' : colors.textSecondary} 
             />
             <Text style={[styles.tabText, activeTab === 'phone' && styles.tabTextActive]}>
               Teléfono
@@ -265,7 +277,7 @@ export default function LoginScreen() {
             <Ionicons 
               name="lock-closed-outline" 
               size={20} 
-              color={activeTab === 'password' ? colors.primary : colors.textSecondary} 
+              color={activeTab === 'password' ? '#ffffff' : colors.textSecondary} 
             />
             <Text style={[styles.tabText, activeTab === 'password' && styles.tabTextActive]}>
               Contraseña
@@ -281,7 +293,11 @@ export default function LoginScreen() {
               {!codeSent && (
                 <View style={styles.inputGroup}>
                   <Text style={styles.label}>Número de teléfono</Text>
-                  <View style={styles.inputContainer}>
+                  <View style={[
+                    styles.inputContainer,
+                    phoneInputFocused && styles.inputContainerFocused,
+                    error && styles.inputError
+                  ]}>
                     <Ionicons name="call-outline" size={20} color={colors.textSecondary} style={styles.inputIcon} />
                     <TextInput
                       style={[styles.input, error && styles.inputError]}
@@ -292,6 +308,8 @@ export default function LoginScreen() {
                         setPhone(text);
                         setError(null);
                       }}
+                      onFocus={() => setPhoneInputFocused(true)}
+                      onBlur={() => setPhoneInputFocused(false)}
                       keyboardType="phone-pad"
                       autoComplete={Platform.OS === 'android' ? 'tel' : 'tel'}
                       textContentType="telephoneNumber"
@@ -524,6 +542,7 @@ export default function LoginScreen() {
             </View>
           )}
         </View>
+        </View>
       </View>
     </ScrollView>
   );
@@ -538,29 +557,70 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     justifyContent: 'center',
     padding: 24,
+    ...(Platform.OS === 'web' && {
+      alignItems: 'center',
+    }),
   },
   content: {
     backgroundColor: colors.backgroundSecondary,
     borderRadius: 24,
-    padding: 32,
+    padding: 0,
     shadowColor: colors.shadow,
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.1,
     shadowRadius: 20,
     elevation: 8,
+    overflow: 'hidden',
+    ...(Platform.OS === 'web' && {
+      width: '100%',
+      maxWidth: 440,
+      alignSelf: 'center',
+    }),
+  },
+  headerSection: {
+    backgroundColor: colors.primary,
+    width: '100%',
+    paddingTop: 32,
+    paddingBottom: 24,
+    paddingHorizontal: 32,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+  },
+  titleContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 16,
+  },
+  logo: {
+    width: 60,
+    height: 60,
+    borderRadius: 10,
+  },
+  subtitleSecondary: {
+    fontSize: 14,
+    color: colors.textSecondary,
+    marginBottom: 24,
+    textAlign: 'center',
+    fontWeight: '400',
   },
   title: {
     fontSize: 32,
     fontWeight: '700',
-    marginBottom: 8,
+    marginBottom: 0,
     textAlign: 'center',
-    color: colors.textPrimary,
+    color: '#ffffff',
     letterSpacing: -0.5,
+  },
+  bodySection: {
+    paddingHorizontal: 32,
+    paddingTop: 24,
+    paddingBottom: 32,
   },
   subtitle: {
     fontSize: 16,
     color: colors.textSecondary,
-    marginBottom: 24,
+    marginBottom: 8,
     textAlign: 'center',
     fontWeight: '400',
   },
@@ -583,7 +643,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   tabActive: {
-    backgroundColor: colors.backgroundSecondary,
+    backgroundColor: colors.primary,
     shadowColor: colors.primary,
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
@@ -596,7 +656,7 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
   },
   tabTextActive: {
-    color: colors.primary,
+    color: '#ffffff',
   },
   form: {
     gap: 20,
@@ -619,6 +679,16 @@ const styles = StyleSheet.create({
     backgroundColor: colors.backgroundSecondary,
     paddingHorizontal: 16,
     minHeight: 52,
+    ...(Platform.OS === 'web' && {
+      outlineStyle: 'none',
+      outlineWidth: 0,
+    }),
+  },
+  inputContainerFocused: {
+    borderColor: colors.primary,
+    ...(Platform.OS === 'web' && {
+      boxShadow: `0 0 0 3px ${colors.primary}20`,
+    }),
   },
   inputIcon: {
     marginRight: 12,
@@ -630,6 +700,12 @@ const styles = StyleSheet.create({
     paddingVertical: Platform.OS === 'android' ? 12 : 0,
     paddingTop: Platform.OS === 'android' ? 12 : 0,
     paddingBottom: Platform.OS === 'android' ? 12 : 0,
+    ...(Platform.OS === 'web' && {
+      outlineStyle: 'none',
+      outlineWidth: 0,
+      borderWidth: 0,
+      backgroundColor: 'transparent',
+    }),
   },
   inputError: {
     borderColor: colors.error,

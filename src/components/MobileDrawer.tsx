@@ -9,6 +9,7 @@ import {
   TouchableWithoutFeedback,
   Modal,
   Platform,
+  ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../theme/colors';
@@ -26,6 +27,8 @@ interface MobileDrawerProps {
   aiMessageInstructions?: string;
   messagesUpdating?: boolean;
   onOpenMessages?: () => void;
+  onOpenNotifications?: () => void;
+  onUpdateMessagesCache?: () => Promise<void>;
 }
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
@@ -42,11 +45,12 @@ export const MobileDrawer: React.FC<MobileDrawerProps> = ({
   notificationsUpdating,
   onToggleNotifications,
   onOpenMessages,
+  onOpenNotifications,
   messagesUpdating,
+  onUpdateMessagesCache,
 }) => {
   const slideAnim = useRef(new Animated.Value(-DRAWER_WIDTH)).current;
   const overlayOpacity = useRef(new Animated.Value(0)).current;
-  const [showNotificationsModal, setShowNotificationsModal] = useState(false);
 
   useEffect(() => {
     if (visible) {
@@ -124,17 +128,23 @@ export const MobileDrawer: React.FC<MobileDrawerProps> = ({
         <View style={styles.divider} />
 
         <View style={styles.menuSection}>
-          {clientId && onToggleNotifications && typeof onToggleNotifications === 'function' && (
+          {clientId && onOpenNotifications && (
             <TouchableOpacity
               style={styles.menuItem}
               onPress={() => {
                 onClose();
-                // Pequeño delay para Android - esperar a que el drawer se cierre completamente
-                setTimeout(() => {
-                  setShowNotificationsModal(true);
-                }, Platform.OS === 'android' ? 300 : 0);
+                // Abrir el modal después de que el drawer se cierre
+                if (Platform.OS === 'web') {
+                  setTimeout(() => {
+                    onOpenNotifications();
+                  }, 100);
+                } else {
+                  // En Android, esperar a que la animación termine
+                  setTimeout(() => {
+                    onOpenNotifications();
+                  }, 350);
+                }
               }}
-              disabled={notificationsUpdating}
               activeOpacity={0.7}
             >
               <Ionicons 
@@ -167,6 +177,33 @@ export const MobileDrawer: React.FC<MobileDrawerProps> = ({
               </Text>
             </TouchableOpacity>
           )}
+          {clientId && onUpdateMessagesCache && (
+            <TouchableOpacity
+              style={styles.menuItem}
+              onPress={async () => {
+                console.log('📢 MobileDrawer - Click en Actualizar');
+                console.log('📢 MobileDrawer - onUpdateMessagesCache existe?', !!onUpdateMessagesCache);
+                onClose();
+                try {
+                  console.log('📢 MobileDrawer - Llamando onUpdateMessagesCache...');
+                  await onUpdateMessagesCache();
+                  console.log('📢 MobileDrawer - onUpdateMessagesCache completado');
+                } catch (err) {
+                  console.error('❌ MobileDrawer - Error al actualizar cache:', err);
+                }
+              }}
+              activeOpacity={0.7}
+            >
+              <Ionicons 
+                name="refresh-outline" 
+                size={24} 
+                color="#fff" 
+              />
+              <Text style={[styles.menuItemText, { color: '#fff' }]}>
+                Actualizar
+              </Text>
+            </TouchableOpacity>
+          )}
           <TouchableOpacity
             style={styles.menuItem}
             onPress={() => {
@@ -180,81 +217,6 @@ export const MobileDrawer: React.FC<MobileDrawerProps> = ({
           </TouchableOpacity>
         </View>
       </Animated.View>
-
-      {/* Modal de configuración de notificaciones */}
-      <Modal
-        visible={showNotificationsModal}
-        transparent={true}
-        animationType="fade"
-        onRequestClose={() => setShowNotificationsModal(false)}
-      >
-        <TouchableOpacity
-          style={styles.notificationsModalOverlay}
-          activeOpacity={1}
-          onPress={() => setShowNotificationsModal(false)}
-        >
-          <TouchableOpacity
-            style={styles.notificationsModalContent}
-            activeOpacity={1}
-            onPress={(e) => e.stopPropagation()}
-          >
-            <View style={styles.notificationsModalHeader}>
-              <Ionicons
-                name={leadsNotificationAllDay ? 'notifications' : 'notifications-off'}
-                size={32}
-                color={colors.primary}
-              />
-              <Text style={styles.notificationsModalTitle}>Notificaciones</Text>
-            </View>
-
-            <View style={styles.notificationsStatusContainer}>
-              <View style={[
-                styles.notificationsStatusBadge,
-                leadsNotificationAllDay ? styles.notificationsStatusActive : styles.notificationsStatusInactive
-              ]}>
-                <Text style={styles.notificationsStatusText}>
-                  {leadsNotificationAllDay ? 'Activado' : 'Desactivado'}
-                </Text>
-              </View>
-            </View>
-
-            <Text style={styles.notificationsModalMessage}>
-              {leadsNotificationAllDay
-                ? 'Actualmente recibes estimados por WhatsApp las 24 horas. Si lo desactivas, los estimados que lleguen durante la noche se guardarán y serán enviados durante la mañana.'
-                : 'Actualmente no recibes estimados durante la noche. Si lo activas, recibirás los estimados inmediatamente, incluso durante la noche.'}
-            </Text>
-
-            <View style={styles.notificationsModalButtons}>
-              <TouchableOpacity
-                style={[styles.notificationsModalButton, styles.notificationsModalButtonCancel]}
-                onPress={() => setShowNotificationsModal(false)}
-                activeOpacity={0.7}
-              >
-                <Text style={styles.notificationsModalButtonCancelText}>Cancelar</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.notificationsModalButton, styles.notificationsModalButtonConfirm]}
-                onPress={async () => {
-                  if (onToggleNotifications) {
-                    await onToggleNotifications();
-                    setShowNotificationsModal(false);
-                  }
-                }}
-                disabled={notificationsUpdating}
-                activeOpacity={0.7}
-              >
-                <Text style={styles.notificationsModalButtonConfirmText}>
-                  {notificationsUpdating 
-                    ? 'Actualizando...' 
-                    : leadsNotificationAllDay 
-                      ? 'Desactivar' 
-                      : 'Activar'}
-                </Text>
-              </TouchableOpacity>
-            </View>
-          </TouchableOpacity>
-        </TouchableOpacity>
-      </Modal>
     </View>
   );
 };

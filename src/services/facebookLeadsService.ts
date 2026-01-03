@@ -36,7 +36,7 @@ export interface FacebookLead {
 }
 
 export interface CreateFacebookLeadDto {
-  clientId?: number;
+  clientId: number; // Requerido - no opcional
   name?: string;
   phoneManual?: string;
   phoneAuto?: string;
@@ -109,7 +109,23 @@ export interface SendPendingResponse {
 export const facebookLeadsService = {
   // Crear lead
   create: async (data: CreateFacebookLeadDto): Promise<FacebookLead> => {
+    console.log('📤 facebookLeadsService.create - Iniciando creación de lead');
+    console.log('📤 facebookLeadsService.create - URL:', `${API_BASE_URL}/facebook-leads`);
+    console.log('📤 facebookLeadsService.create - Data completa:', JSON.stringify(data, null, 2));
+    console.log('📤 facebookLeadsService.create - clientId:', data.clientId);
+    console.log('📤 facebookLeadsService.create - clientId tipo:', typeof data.clientId);
+    
+    if (!data.clientId || data.clientId === 0) {
+      console.error('❌ facebookLeadsService.create - ERROR: clientId es requerido pero no está presente o es 0');
+      throw new Error('clientId es requerido para crear un lead');
+    }
+    
     const response = await api.post<ApiResponse<FacebookLead>>(`${API_BASE_URL}/facebook-leads`, data);
+    
+    console.log('✅ facebookLeadsService.create - Lead creado exitosamente');
+    console.log('✅ facebookLeadsService.create - Response status:', response.status);
+    console.log('✅ facebookLeadsService.create - Response data:', JSON.stringify(response.data, null, 2));
+    
     return response.data.data;
   },
 
@@ -181,8 +197,26 @@ export const facebookLeadsService = {
 
   // Actualizar lead
   update: async (id: number, data: UpdateFacebookLeadDto): Promise<FacebookLead> => {
-    const response = await api.patch<ApiResponse<FacebookLead>>(`${API_BASE_URL}/facebook-leads/${id}`, data);
-    return response.data.data;
+    console.log('📤 facebookLeadsService.update - Iniciando actualización de lead');
+    console.log('📤 facebookLeadsService.update - Lead ID:', id);
+    console.log('📤 facebookLeadsService.update - URL:', `${API_BASE_URL}/facebook-leads/${id}`);
+    console.log('📤 facebookLeadsService.update - Data completa:', JSON.stringify(data, null, 2));
+    
+    try {
+      const response = await api.patch<ApiResponse<FacebookLead>>(`${API_BASE_URL}/facebook-leads/${id}`, data);
+      
+      console.log('✅ facebookLeadsService.update - Lead actualizado exitosamente');
+      console.log('✅ facebookLeadsService.update - Response status:', response.status);
+      console.log('✅ facebookLeadsService.update - Response data:', JSON.stringify(response.data, null, 2));
+      
+      return response.data.data;
+    } catch (error: any) {
+      console.error('❌ facebookLeadsService.update - Error:', error);
+      console.error('❌ facebookLeadsService.update - Error message:', error?.message);
+      console.error('❌ facebookLeadsService.update - Error response:', error?.response?.data);
+      console.error('❌ facebookLeadsService.update - Error status:', error?.response?.status);
+      throw error;
+    }
   },
 
   // Eliminar lead

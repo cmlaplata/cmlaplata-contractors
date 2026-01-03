@@ -27,8 +27,6 @@
       },
       "edgeToEdgeEnabled": true,
       "package": "com.cmlaplata.app",
-      "name": "CM La Plata",
-      "usesCleartextTraffic": true,
       "runtimeVersion": "1.0.0"
     },
     "web": {
@@ -36,7 +34,8 @@
       "bundler": "metro"
     },
     "plugins": [
-      "expo-router"
+      "expo-router",
+      "@react-native-community/datetimepicker"
     ],
     "updates": {
       "enabled": true,
