@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, ActivityIndicator, ScrollView, Platform, Image } from 'react-native';
+import React, { useState, useRef } from 'react';
+import { View, Text, StyleSheet, TextInput, TouchableOpacity, ActivityIndicator, ScrollView, Platform, Image, Modal, Animated } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useAuth } from '../../src/context/AuthContext';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../../src/theme/colors';
+import { analyticsService } from '../../src/services/analyticsService';
 
 type LoginTab = 'phone' | 'password';
 
@@ -28,6 +29,11 @@ export default function LoginScreen() {
   const [error, setError] = useState<string | null>(null);
   const [errorDetails, setErrorDetails] = useState<string | null>(null);
   const [showDetails, setShowDetails] = useState(false);
+  
+  // Estados para el toast
+  const [toastVisible, setToastVisible] = useState(false);
+  const [toastMessage, setToastMessage] = useState('');
+  const toastOpacity = useRef(new Animated.Value(0)).current;
   
   const { login, loginWithPhone, requestVerificationCode } = useAuth();
   const router = useRouter();
@@ -87,6 +93,31 @@ export default function LoginScreen() {
     setError(null);
   };
 
+  // Función para mostrar toast
+  const showToast = (message: string) => {
+    setToastMessage(message);
+    setToastVisible(true);
+    
+    // Resetear la animación
+    toastOpacity.setValue(0);
+    
+    Animated.sequence([
+      Animated.timing(toastOpacity, {
+        toValue: 1,
+        duration: 300,
+        useNativeDriver: true,
+      }),
+      Animated.delay(4000), // Duración duplicada: 4 segundos
+      Animated.timing(toastOpacity, {
+        toValue: 0,
+        duration: 300,
+        useNativeDriver: true,
+      }),
+    ]).start(() => {
+      setToastVisible(false);
+    });
+  };
+
   // Solicitar código de verificación
   const handleRequestCode = async () => {
     setError(null);
@@ -106,6 +137,8 @@ export default function LoginScreen() {
       if (result.success) {
         setCodeSent(true);
         setError(null);
+        showToast('Enviado por WhatsApp');
+        analyticsService.logCodeSent();
       } else {
         setError(result.error || 'Error al solicitar código');
       }
@@ -144,6 +177,8 @@ export default function LoginScreen() {
       if (result.success) {
         console.log('✅ Login exitoso, redirigiendo...');
         setError(null);
+        analyticsService.logCodeVerified();
+        analyticsService.logLogin('phone');
       } else {
         const errorMsg = result.error || 'Error al verificar código';
         setError(errorMsg);
@@ -192,6 +227,7 @@ export default function LoginScreen() {
       if (result.success) {
         console.log('✅ Login exitoso, redirigiendo...');
         setError(null);
+        analyticsService.logLogin('email');
       } else {
         const errorMsg = result.error || 'Error al iniciar sesión';
         const errorCode = result.errorCode || 'unknown';
@@ -305,7 +341,9 @@ export default function LoginScreen() {
                       placeholderTextColor={colors.textTertiary}
                       value={phone}
                       onChangeText={(text) => {
-                        setPhone(text);
+                        // Solo permitir números
+                        const numericText = text.replace(/[^\d]/g, '');
+                        setPhone(numericText);
                         setError(null);
                       }}
                       onFocus={() => setPhoneInputFocused(true)}
@@ -544,6 +582,39 @@ export default function LoginScreen() {
         </View>
         </View>
       </View>
+
+      {/* Toast de notificación */}
+      <Modal
+        visible={toastVisible}
+        transparent={true}
+        animationType="none"
+        onRequestClose={() => {}}
+        statusBarTranslucent={true}
+      >
+        <View style={styles.toastModalContainer}>
+          <Animated.View
+            style={[
+              styles.toastContainer,
+              {
+                opacity: toastOpacity,
+                transform: [
+                  {
+                    translateY: toastOpacity.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: [-50, 0],
+                    }),
+                  },
+                ],
+              },
+            ]}
+          >
+            <View style={styles.toastContent}>
+              <Ionicons name="logo-whatsapp" size={24} color="#ffffff" />
+              <Text style={styles.toastText}>{toastMessage}</Text>
+            </View>
+          </Animated.View>
+        </View>
+      </Modal>
     </ScrollView>
   );
 }
@@ -817,5 +888,47 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
+  },
+  toastModalContainer: {
+    flex: 1,
+    justifyContent: 'flex-start',
+    alignItems: 'center',
+    backgroundColor: 'transparent',
+    pointerEvents: 'none',
+    paddingTop: Platform.OS === 'web' ? 80 : 60,
+    zIndex: 9999,
+    ...(Platform.OS === 'web' && {
+      position: 'fixed',
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
+    }),
+  },
+  toastContainer: {
+    alignItems: 'center',
+    pointerEvents: 'none',
+  },
+  toastContent: {
+    backgroundColor: '#25D366', // Color verde de WhatsApp
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+    paddingVertical: 14,
+    borderRadius: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
+    gap: 12,
+    minWidth: 280,
+    maxWidth: '92%',
+  },
+  toastText: {
+    color: '#ffffff',
+    fontSize: 15,
+    fontWeight: '600',
   },
 });

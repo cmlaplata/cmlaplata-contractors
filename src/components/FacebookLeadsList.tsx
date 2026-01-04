@@ -1,5 +1,5 @@
 import React, { useState, useImperativeHandle, forwardRef, useEffect, useRef, useMemo, useCallback } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, TextInput, Platform, Animated, Modal, Linking, RefreshControl, Dimensions } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, TextInput, Platform, Animated, Modal, Linking, RefreshControl, Dimensions, AppState } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFacebookLeads } from '../hooks/useFacebookLeads';
@@ -10,6 +10,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../theme/colors';
 import { generateDeepLink, copyDeepLink } from '../utils/deepLinks';
 import { useDebugLog } from '../context/DebugLogContext';
+import { analyticsService } from '../services/analyticsService';
 
 // Importar Clipboard
 let Clipboard: any;
@@ -88,6 +89,32 @@ const FacebookLeadsListInner = (
   }, [filterLeadId]);
 
   const { user, loading: authLoading, refreshUserClientData } = useAuth();
+  
+  // Refrescar datos del cliente cuando el componente se monte o cuando cambie el clientId
+  useEffect(() => {
+    if (user?.clientId && !authLoading) {
+      console.log('🔄 Refrescando datos del cliente al montar el componente...');
+      refreshUserClientData().catch((error) => {
+        console.warn('⚠️ Error al refrescar datos del cliente:', error);
+      });
+    }
+  }, [user?.clientId, authLoading]);
+
+  // Refrescar datos del cliente cuando la app vuelva al primer plano (por si se actualizó el país)
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextAppState) => {
+      if (nextAppState === 'active' && user?.clientId) {
+        console.log('🔄 App volvió al primer plano, refrescando datos del cliente...');
+        refreshUserClientData().catch((error) => {
+          console.warn('⚠️ Error al refrescar datos del cliente:', error);
+        });
+      }
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, [user?.clientId]);
   
   // Console log para userClientData - diagnóstico completo
   useEffect(() => {
@@ -269,6 +296,24 @@ const FacebookLeadsListInner = (
   const [modalLanguage, setModalLanguage] = useState<'español' | 'ingles'>('ingles');
   const [modalLeadId, setModalLeadId] = useState<number | null>(null);
   const [modalLoading, setModalLoading] = useState(false);
+  const [modalError, setModalError] = useState<string | null>(null);
+  const [phoneSelectionModalVisible, setPhoneSelectionModalVisible] = useState(false);
+  const [pendingSendAction, setPendingSendAction] = useState<((phone: string) => void) | null>(null);
+  const [availablePhones, setAvailablePhones] = useState<{ phone: string; label: string }[]>([]);
+  const pendingSendActionRef = useRef<((phone: string) => void) | null>(null);
+
+  // Debug: Rastrear cambios en pendingSendAction
+  useEffect(() => {
+    console.log('🔍 [DEBUG] pendingSendAction cambió:', {
+      tieneValor: !!pendingSendAction,
+      tipo: typeof pendingSendAction,
+      esFuncion: typeof pendingSendAction === 'function',
+      refTieneValor: !!pendingSendActionRef.current,
+      refEsFuncion: typeof pendingSendActionRef.current === 'function',
+      modalVisible: phoneSelectionModalVisible,
+      availablePhonesCount: availablePhones.length,
+    });
+  }, [pendingSendAction, phoneSelectionModalVisible, availablePhones.length]);
   const [dateTimeModalVisible, setDateTimeModalVisible] = useState(false);
   const [dateTimeModalType, setDateTimeModalType] = useState<'appointment' | 'recontact' | null>(null);
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
@@ -1135,9 +1180,11 @@ const FacebookLeadsListInner = (
     try {
       const link = await copyDeepLink(`leads/${leadId}`);
       showToast('Link copiado');
+      analyticsService.logLinkCopied(leadId);
     } catch (error) {
       const link = generateDeepLink(`leads/${leadId}`);
       showToast('Link copiado');
+      analyticsService.logLinkCopied(leadId);
     }
   };
 
@@ -1146,6 +1193,15 @@ const FacebookLeadsListInner = (
       setErrorMessage('Este lead no tiene un número de teléfono');
       setTimeout(() => setErrorMessage(null), 5000);
       return;
+    }
+
+    // Obtener el leadId del contexto (buscar en la lista)
+    const lead = displayLeads.find(l => 
+      l.phone === phoneNumber || l.phoneManual === phoneNumber || l.phoneAuto === phoneNumber
+    );
+    const leadId = lead?.id;
+    if (leadId) {
+      analyticsService.logCallInitiated(leadId);
     }
 
     // Limpiar el número de teléfono (quitar espacios, guiones, etc.)
@@ -1164,6 +1220,13 @@ const FacebookLeadsListInner = (
       setErrorMessage('Este lead no tiene un email');
       setTimeout(() => setErrorMessage(null), 5000);
       return;
+    }
+
+    // Obtener el leadId del contexto
+    const lead = displayLeads.find(l => l.email === email);
+    const leadId = lead?.id;
+    if (leadId) {
+      analyticsService.logEmailInitiated(leadId);
     }
 
     const emailUrl = `mailto:${email}`;
@@ -1209,10 +1272,15 @@ const FacebookLeadsListInner = (
 
   const handleCopyEmail = async (email: string) => {
     try {
+      // Obtener el leadId del contexto
+      const lead = displayLeads.find(l => l.email === email);
+      const leadId = lead?.id;
+
       if (Platform.OS === 'web') {
         if (navigator.clipboard && navigator.clipboard.writeText) {
           await navigator.clipboard.writeText(email);
           showToast('Email copiado');
+          if (leadId) analyticsService.logEmailCopied(leadId);
         } else {
           const textArea = document.createElement('textarea');
           textArea.value = email;
@@ -1223,12 +1291,14 @@ const FacebookLeadsListInner = (
           document.execCommand('copy');
           document.body.removeChild(textArea);
           showToast('Email copiado');
+          if (leadId) analyticsService.logEmailCopied(leadId);
         }
       } else {
         try {
           const Clipboard = require('expo-clipboard');
           await Clipboard.setStringAsync(email);
           showToast('Email copiado');
+          if (leadId) analyticsService.logEmailCopied(leadId);
         } catch {
           // Selecciona el email y cópialo manualmente
         }
@@ -1269,6 +1339,7 @@ const FacebookLeadsListInner = (
   };
 
   const handleSendWhatsApp = async (leadId: number) => {
+    analyticsService.logWhatsAppInitiated(leadId);
     try {
       setGeneratingWhatsApp(leadId);
       
@@ -1333,6 +1404,8 @@ const FacebookLeadsListInner = (
   };
 
   const handleCopyToClipboard = async () => {
+    if (!modalLeadId) return;
+    analyticsService.logContentCopied(modalLeadId, modalType);
     try {
       if (Platform.OS === 'web') {
         // Para web, usar la API del navegador
@@ -1407,26 +1480,50 @@ const FacebookLeadsListInner = (
     setModalType('email');
     setModalLanguage('ingles');
     setModalLeadId(null);
+    setModalError(null);
   };
 
-  const handleSendSMSFromModal = () => {
-    if (!modalLeadId) {
-      setErrorMessage('No se pudo identificar el lead');
-      setTimeout(() => setErrorMessage(null), 5000);
-      return;
+  // Función helper para verificar si hay dos números diferentes
+  const getAvailablePhones = (lead: FacebookLead): { phone: string; label: string }[] => {
+    const phones: { phone: string; label: string }[] = [];
+    
+    // Normalizar números para comparación (solo dígitos)
+    const normalizeForComparison = (phone: string | null): string => {
+      if (!phone) return '';
+      return phone.replace(/[\s\-\(\)\+]/g, '');
+    };
+
+    const phoneManual = lead.phoneManual ? normalizeForComparison(lead.phoneManual) : '';
+    const phoneAuto = lead.phoneAuto ? normalizeForComparison(lead.phoneAuto) : '';
+
+    // Si phoneManual y phoneAuto son diferentes y ambos existen, agregarlos
+    if (phoneManual && phoneAuto && phoneManual !== phoneAuto) {
+      if (lead.phoneManual) phones.push({ phone: lead.phoneManual, label: 'Teléfono 1' });
+      if (lead.phoneAuto) phones.push({ phone: lead.phoneAuto, label: 'Teléfono 2' });
+    } else {
+      // Si son iguales o solo hay uno, no mostrar selección
+      return [];
     }
 
-    // Buscar el lead en la lista
-    const lead = displayLeads.find(l => l.id === modalLeadId);
-    if (!lead) {
-      setErrorMessage('No se encontró el lead');
-      setTimeout(() => setErrorMessage(null), 5000);
-      return;
+    return phones;
+  };
+
+  // Función para enviar SMS a un número específico con contenido explícito
+  const sendSMSToPhoneWithContent = (phone: string, content: string) => {
+    console.log('📱 sendSMSToPhoneWithContent llamado con:', phone);
+    console.log('📱 content disponible?', !!content);
+    console.log('📱 content length:', content?.length || 0);
+    
+    // Validar que el teléfono no esté vacío o sea solo espacios
+    if (!phone || !phone.trim()) {
+      console.warn('⚠️ sendSMSToPhoneWithContent: Intento de enviar SMS sin número válido');
+      return; // No mostrar error, solo retornar silenciosamente
     }
 
-    const phone = lead.phone || lead.phoneManual || lead.phoneAuto;
-    if (!phone) {
-      setErrorMessage('Este lead no tiene un número de teléfono');
+    // Validar que haya contenido del mensaje
+    if (!content || !content.trim()) {
+      console.error('❌ sendSMSToPhoneWithContent: No hay contenido del mensaje');
+      setErrorMessage('No hay contenido del mensaje para enviar');
       setTimeout(() => setErrorMessage(null), 5000);
       return;
     }
@@ -1445,68 +1542,41 @@ const FacebookLeadsListInner = (
     }
 
     // Codificar el mensaje para la URL
-    const encodedMessage = encodeURIComponent(modalContent);
+    const encodedMessage = encodeURIComponent(content);
     const smsUrl = `sms:${cleanPhone}?body=${encodedMessage}`;
 
-    Linking.openURL(smsUrl).catch((err) => {
+    console.log('📱 Abriendo SMS URL (primeros 100 chars):', smsUrl.substring(0, 100));
+
+    Linking.openURL(smsUrl).then(() => {
+      console.log('✅ SMS abierto correctamente');
+    }).catch((err) => {
+      console.error('❌ Error al abrir SMS:', err);
       setErrorMessage('No se pudo abrir la aplicación de mensajes');
       setTimeout(() => setErrorMessage(null), 5000);
-      console.error('Error al abrir SMS:', err);
     });
   };
 
-  const handleSendEmailFromModal = () => {
-    if (!modalLeadId) {
-      setErrorMessage('No se pudo identificar el lead');
-      setTimeout(() => setErrorMessage(null), 5000);
-      return;
-    }
-
-    // Buscar el lead en la lista
-    const lead = displayLeads.find(l => l.id === modalLeadId);
-    if (!lead) {
-      setErrorMessage('No se encontró el lead');
-      setTimeout(() => setErrorMessage(null), 5000);
-      return;
-    }
-
-    const email = lead.email;
-    if (!email) {
-      setErrorMessage('Este lead no tiene un email');
-      setTimeout(() => setErrorMessage(null), 5000);
-      return;
-    }
-
-    // Codificar el asunto y el cuerpo del email para la URL
-    const encodedSubject = encodeURIComponent('Contacto');
-    const encodedBody = encodeURIComponent(modalContent);
-    const emailUrl = `mailto:${email}?subject=${encodedSubject}&body=${encodedBody}`;
-
-    Linking.openURL(emailUrl).catch((err) => {
-      setErrorMessage('No se pudo abrir la aplicación de email');
-      setTimeout(() => setErrorMessage(null), 5000);
-      console.error('Error al abrir email:', err);
-    });
+  // Función para enviar SMS a un número específico (usa modalContent del estado)
+  const sendSMSToPhone = (phone: string) => {
+    return sendSMSToPhoneWithContent(phone, modalContent);
   };
 
-  const handleSendWhatsAppFromModal = () => {
-    if (!modalLeadId) {
-      setErrorMessage('No se pudo identificar el lead');
-      setTimeout(() => setErrorMessage(null), 5000);
-      return;
+  // Función para enviar WhatsApp a un número específico con contenido explícito
+  const sendWhatsAppToPhoneWithContent = (phone: string, content: string) => {
+    console.log('📱 sendWhatsAppToPhoneWithContent llamado con:', phone);
+    console.log('📱 content disponible?', !!content);
+    console.log('📱 content length:', content?.length || 0);
+    
+    // Validar que el teléfono no esté vacío o sea solo espacios
+    if (!phone || !phone.trim()) {
+      console.warn('⚠️ sendWhatsAppToPhoneWithContent: Intento de enviar WhatsApp sin número válido');
+      return; // No mostrar error, solo retornar silenciosamente
     }
 
-    // Buscar el lead en la lista
-    const lead = displayLeads.find(l => l.id === modalLeadId);
-    if (!lead) {
-      setErrorMessage('No se encontró el lead');
-      setTimeout(() => setErrorMessage(null), 5000);
-      return;
-    }
-
-    const phone = lead.phone || lead.phoneManual || lead.phoneAuto;
-    if (!phone) {
-      setErrorMessage('Este lead no tiene un número de teléfono');
+    // Validar que haya contenido del mensaje
+    if (!content || !content.trim()) {
+      console.error('❌ sendWhatsAppToPhoneWithContent: No hay contenido del mensaje');
+      setErrorMessage('No hay contenido del mensaje para enviar');
       setTimeout(() => setErrorMessage(null), 5000);
       return;
     }
@@ -1528,14 +1598,192 @@ const FacebookLeadsListInner = (
     const whatsappPhone = cleanPhone.replace(/\+/g, '');
     
     // Codificar el mensaje para la URL de WhatsApp
-    const encodedMessage = encodeURIComponent(modalContent);
+    const encodedMessage = encodeURIComponent(content);
     const whatsappUrl = `https://wa.me/${whatsappPhone}?text=${encodedMessage}`;
 
-    Linking.openURL(whatsappUrl).catch((err) => {
+    console.log('📱 Abriendo WhatsApp URL (primeros 100 chars):', whatsappUrl.substring(0, 100));
+
+    Linking.openURL(whatsappUrl).then(() => {
+      console.log('✅ WhatsApp abierto correctamente');
+    }).catch((err) => {
+      console.error('❌ Error al abrir WhatsApp:', err);
       setErrorMessage('No se pudo abrir WhatsApp');
       setTimeout(() => setErrorMessage(null), 5000);
-      console.error('Error al abrir WhatsApp:', err);
     });
+  };
+
+  // Función para enviar WhatsApp a un número específico (usa modalContent del estado)
+  const sendWhatsAppToPhone = (phone: string) => {
+    return sendWhatsAppToPhoneWithContent(phone, modalContent);
+  };
+
+  const handleSendSMSFromModal = () => {
+    if (!modalLeadId) {
+      setErrorMessage('No se pudo identificar el lead');
+      setTimeout(() => setErrorMessage(null), 5000);
+      return;
+    }
+
+    // Buscar el lead en la lista
+    const lead = displayLeads.find(l => l.id === modalLeadId);
+    if (!lead) {
+      setErrorMessage('No se encontró el lead');
+      setTimeout(() => setErrorMessage(null), 5000);
+      return;
+    }
+
+    // Verificar si hay dos números diferentes
+    const phones = getAvailablePhones(lead);
+    
+    if (phones.length >= 2) {
+      // Hay dos números diferentes, mostrar modal de selección
+      // Limpiar cualquier error previo antes de mostrar el modal
+      setErrorMessage(null);
+      setAvailablePhones(phones);
+      
+      // Guardar el contenido del mensaje y el leadId en variables locales para el closure
+      const currentModalContent = modalContent;
+      const currentModalLeadId = modalLeadId;
+      const currentModalType = modalType;
+      
+      console.log('📱 ========== CONFIGURANDO PENDING SEND ACTION (SMS) ==========');
+      console.log('📱 modalContent guardado:', currentModalContent ? currentModalContent.substring(0, 50) + '...' : 'NO DISPONIBLE');
+      console.log('📱 modalLeadId guardado:', currentModalLeadId);
+      console.log('📱 modalType guardado:', currentModalType);
+      console.log('📱 phones.length:', phones.length);
+      console.log('📱 availablePhones antes:', availablePhones.length);
+      
+      const sendAction = (selectedPhone: string) => {
+        console.log('📱 ========== PENDING SEND ACTION EJECUTÁNDOSE ==========');
+        console.log('📱 selectedPhone recibido:', selectedPhone);
+        console.log('📱 modalContent en closure:', currentModalContent ? currentModalContent.substring(0, 50) + '...' : 'NO DISPONIBLE');
+        console.log('📱 modalLeadId en closure:', currentModalLeadId);
+        analyticsService.logContentSentToClient(currentModalLeadId, currentModalType, 'sms');
+        // Usar el contenido guardado en el closure
+        sendSMSToPhoneWithContent(selectedPhone, currentModalContent);
+      };
+      
+      // Guardar en ref y en estado
+      console.log('📱 Guardando función en ref...');
+      pendingSendActionRef.current = sendAction;
+      console.log('📱 Ref guardado, pendingSendActionRef.current existe?', !!pendingSendActionRef.current);
+      console.log('📱 Guardando función en estado...');
+      setPendingSendAction(sendAction);
+      console.log('📱 Estado actualizado, setPhoneSelectionModalVisible(true)...');
+      setPhoneSelectionModalVisible(true);
+      console.log('📱 ========== CONFIGURACIÓN COMPLETA ==========');
+      return;
+    }
+
+    // Si no hay dos números diferentes, usar el comportamiento normal
+    const phone = lead.phone || lead.phoneManual || lead.phoneAuto;
+    if (!phone) {
+      setErrorMessage('Este lead no tiene un número de teléfono');
+      setTimeout(() => setErrorMessage(null), 5000);
+      return;
+    }
+
+    analyticsService.logContentSentToClient(modalLeadId, modalType, 'sms');
+    sendSMSToPhone(phone);
+  };
+
+  const handleSendEmailFromModal = () => {
+    // Limpiar error previo
+    setModalError(null);
+    
+    if (!modalLeadId) {
+      setModalError('No se pudo identificar el lead');
+      setTimeout(() => setModalError(null), 5000);
+      return;
+    }
+
+    analyticsService.logContentSentToClient(modalLeadId, modalType, 'email');
+
+    // Buscar el lead en la lista
+    const lead = displayLeads.find(l => l.id === modalLeadId);
+    if (!lead) {
+      setModalError('No se encontró el lead');
+      setTimeout(() => setModalError(null), 5000);
+      return;
+    }
+
+    const email = lead.email;
+    if (!email) {
+      setModalError('Este lead no tiene un email');
+      setTimeout(() => setModalError(null), 5000);
+      return;
+    }
+
+    // Codificar el asunto y el cuerpo del email para la URL
+    const encodedSubject = encodeURIComponent('Contacto');
+    const encodedBody = encodeURIComponent(modalContent);
+    const emailUrl = `mailto:${email}?subject=${encodedSubject}&body=${encodedBody}`;
+
+    Linking.openURL(emailUrl).catch((err) => {
+      setModalError('No se pudo abrir la aplicación de email');
+      setTimeout(() => setModalError(null), 5000);
+      console.error('Error al abrir email:', err);
+    });
+  };
+
+  const handleSendWhatsAppFromModal = () => {
+    if (!modalLeadId) {
+      setErrorMessage('No se pudo identificar el lead');
+      setTimeout(() => setErrorMessage(null), 5000);
+      return;
+    }
+
+    // Buscar el lead en la lista
+    const lead = displayLeads.find(l => l.id === modalLeadId);
+    if (!lead) {
+      setErrorMessage('No se encontró el lead');
+      setTimeout(() => setErrorMessage(null), 5000);
+      return;
+    }
+
+    // Verificar si hay dos números diferentes
+    const phones = getAvailablePhones(lead);
+    
+    if (phones.length >= 2) {
+      // Hay dos números diferentes, mostrar modal de selección
+      // Limpiar cualquier error previo antes de mostrar el modal
+      setErrorMessage(null);
+      setAvailablePhones(phones);
+      
+      // Guardar el contenido del mensaje y el leadId en variables locales para el closure
+      const currentModalContent = modalContent;
+      const currentModalLeadId = modalLeadId;
+      const currentModalType = modalType;
+      
+      console.log('📱 Configurando pendingSendAction para WhatsApp');
+      console.log('📱 modalContent guardado:', currentModalContent ? currentModalContent.substring(0, 50) + '...' : 'NO DISPONIBLE');
+      console.log('📱 modalLeadId guardado:', currentModalLeadId);
+      
+      const sendAction = (selectedPhone: string) => {
+        console.log('📱 pendingSendAction ejecutándose con:', selectedPhone);
+        console.log('📱 modalContent en closure:', currentModalContent ? currentModalContent.substring(0, 50) + '...' : 'NO DISPONIBLE');
+        analyticsService.logContentSentToClient(currentModalLeadId, currentModalType, 'whatsapp');
+        // Usar el contenido guardado en el closure
+        sendWhatsAppToPhoneWithContent(selectedPhone, currentModalContent);
+      };
+      
+      // Guardar en ref y en estado
+      pendingSendActionRef.current = sendAction;
+      setPendingSendAction(sendAction);
+      setPhoneSelectionModalVisible(true);
+      return;
+    }
+
+    // Si no hay dos números diferentes, usar el comportamiento normal
+    const phone = lead.phone || lead.phoneManual || lead.phoneAuto;
+    if (!phone) {
+      setErrorMessage('Este lead no tiene un número de teléfono');
+      setTimeout(() => setErrorMessage(null), 5000);
+      return;
+    }
+
+    analyticsService.logContentSentToClient(modalLeadId, modalType, 'whatsapp');
+    sendWhatsAppToPhone(phone);
   };
 
   // Funciones de cache para contenido generado
@@ -1644,6 +1892,7 @@ const FacebookLeadsListInner = (
   };
 
   const handleText = async (leadId: number) => {
+    analyticsService.logSMSInitiated(leadId);
     try {
       setGeneratingSMS(leadId);
       
@@ -1821,7 +2070,7 @@ const FacebookLeadsListInner = (
 
   const getStatusLabel = (status: string): string => {
     const statusMap: { [key: string]: string } = {
-      'no-contest': 'No contestó',
+      'no-contest': 'No contesto', // Sin tilde, como el backend
       'appointment': 'Cita agendada',
       'recontact': 'Por recontactar',
       'estimated-sold': 'Vendido',
@@ -1919,6 +2168,9 @@ const FacebookLeadsListInner = (
           
           console.log('✅ handleClientStatusOption: Lead actualizado exitosamente:', updatedLead);
           
+          // Registrar evento de Analytics
+          analyticsService.logClientStatusChanged(leadId, status);
+          
           // Actualizar estado local
           setClientStatuses(prev => ({ ...prev, [leadId]: status }));
           
@@ -2000,6 +2252,9 @@ const FacebookLeadsListInner = (
         console.log('✅ handleClientStatusOption: Lead actualizado exitosamente:', updatedLead);
         console.log('✅ handleClientStatusOption: clientStatus actualizado:', updatedLead.clientStatus);
         
+        // Registrar evento de Analytics
+        analyticsService.logClientStatusChanged(leadId, status);
+        
         // Actualizar estado local
         setClientStatuses(prev => ({ ...prev, [leadId]: status }));
         console.log('✅ handleClientStatusOption: Estado local actualizado');
@@ -2067,22 +2322,69 @@ const FacebookLeadsListInner = (
     }
   };
 
+  // Función helper para parsear fecha sin problemas de zona horaria
+  const parseDateSafely = (dateString: string | null | undefined): Date => {
+    if (!dateString) {
+      return new Date();
+    }
+    
+    // Si viene como string "YYYY-MM-DD" o ISO string
+    if (typeof dateString === 'string') {
+      if (dateString.includes('T')) {
+        // Es ISO string completo (puede tener Z al final indicando UTC)
+        // Extraer solo la parte de fecha (antes de la T) para evitar problemas de zona horaria
+        const datePart = dateString.split('T')[0];
+        const [year, month, day] = datePart.split('-').map(Number);
+        // Crear fecha en zona horaria local (no UTC) usando solo la fecha
+        return new Date(year, month - 1, day);
+      } else {
+        // Es solo fecha "YYYY-MM-DD", parsear manualmente para evitar problemas de zona horaria
+        const [year, month, day] = dateString.split('-').map(Number);
+        // Crear fecha en zona horaria local (no UTC)
+        return new Date(year, month - 1, day);
+      }
+    } else if (dateString instanceof Date) {
+      return dateString;
+    } else {
+      return new Date(dateString);
+    }
+  };
+
   const handleModifyDateTime = (lead: FacebookLead, type: 'appointment' | 'recontact') => {
     setDateTimeModalType(type);
     setModalLeadId(lead.id);
     
     if (type === 'appointment' && lead.appointmentDate && lead.appointmentTime) {
       // Pre-llenar con valores existentes
-      const date = new Date(lead.appointmentDate);
+      // Usar parseDateSafely para evitar problemas de zona horaria
+      const date = parseDateSafely(lead.appointmentDate);
+      console.log('📅 handleModifyDateTime (appointment):', {
+        appointmentDateOriginal: lead.appointmentDate,
+        dateParsed: date,
+        dateLocalString: date.toLocaleDateString('es-AR'),
+        dateISO: date.toISOString(),
+      });
       setSelectedDate(date);
       const [hours, minutes] = lead.appointmentTime.split(':');
       setSelectedTime(`${hours}:${minutes}`);
     } else if (type === 'recontact' && lead.recontactDate && lead.recontactTime) {
       // Pre-llenar con valores existentes
-      const date = new Date(lead.recontactDate);
+      // Usar parseDateSafely para evitar problemas de zona horaria
+      const date = parseDateSafely(lead.recontactDate);
+      console.log('📅 ========== handleModifyDateTime (recontact) ==========');
+      console.log('📅 lead.recontactDate (RAW):', lead.recontactDate);
+      console.log('📅 lead.recontactDate (tipo):', typeof lead.recontactDate);
+      console.log('📅 date parseado:', date);
+      console.log('📅 date.toString():', date.toString());
+      console.log('📅 date.toLocaleDateString(es-AR):', date.toLocaleDateString('es-AR'));
+      console.log('📅 date.getFullYear():', date.getFullYear());
+      console.log('📅 date.getMonth():', date.getMonth());
+      console.log('📅 date.getDate():', date.getDate());
+      console.log('📅 date.getHours():', date.getHours());
       setSelectedDate(date);
       const [hours, minutes] = lead.recontactTime.split(':');
       setSelectedTime(`${hours}:${minutes}`);
+      console.log('📅 selectedTime configurado:', `${hours}:${minutes}`);
     } else {
       // Valores por defecto si no hay existentes
       setSelectedDate(new Date());
@@ -2177,40 +2479,99 @@ const FacebookLeadsListInner = (
       
       // Formatear fecha y hora
       const [hours, minutes] = selectedTime.split(':').map(Number);
-      const dateTime = new Date(selectedDate);
-      dateTime.setHours(hours, minutes, 0, 0);
       
-      // Crear ISO string para appointmentDate/recontactDate (el backend espera ISO string)
-      const isoString = dateTime.toISOString();
+      // Obtener año, mes y día de la fecha seleccionada (en zona horaria local)
+      const year = selectedDate.getFullYear();
+      const month = selectedDate.getMonth() + 1; // getMonth() devuelve 0-11
+      const day = selectedDate.getDate();
+      
+      // Formatear fecha como YYYY-MM-DD (sin conversión a UTC para evitar problemas de zona horaria)
+      const formattedDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      
+      // El backend espera un ISO string pero acepta YYYY-MM-DD
+      // Crear un ISO string usando solo la fecha (sin hora) para evitar problemas de zona horaria
+      // Formato: YYYY-MM-DDTHH:MM:SS (sin Z para evitar conversión a UTC)
+      // Usamos hora 00:00:00 porque la hora real se envía por separado en appointmentTime/recontactTime
+      const isoString = `${formattedDate}T00:00:00`;
+      
       // Formatear hora a HH:MM para appointmentTime/recontactTime
       const formattedTime = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+      
+      console.log('🟢 ========== handleSaveDateTime: INICIO ==========');
+      console.log('🟢 selectedDate objeto Date:', selectedDate);
+      console.log('🟢 selectedDate.toString():', selectedDate.toString());
+      console.log('🟢 selectedDate.toISOString():', selectedDate.toISOString());
+      console.log('🟢 selectedDate.toLocaleDateString(es-AR):', selectedDate.toLocaleDateString('es-AR'));
+      console.log('🟢 selectedDate.getFullYear():', selectedDate.getFullYear());
+      console.log('🟢 selectedDate.getMonth():', selectedDate.getMonth(), '(0-11, sumar 1 para mes real)');
+      console.log('🟢 selectedDate.getDate():', selectedDate.getDate());
+      console.log('🟢 selectedDate.getHours():', selectedDate.getHours());
+      console.log('🟢 selectedDate.getTimezoneOffset():', selectedDate.getTimezoneOffset(), 'minutos');
+      console.log('🟢 year extraído:', year);
+      console.log('🟢 month extraído:', month, '(ya sumado 1)');
+      console.log('🟢 day extraído:', day);
+      console.log('🟢 formattedDate (YYYY-MM-DD):', formattedDate);
+      console.log('🟢 isoString creado:', isoString);
+      console.log('🟢 selectedTime:', selectedTime);
+      console.log('🟢 hours, minutes:', hours, minutes);
+      console.log('🟢 formattedTime:', formattedTime);
       
       // Preparar opciones según el tipo de estado
       const options: any = {
         sendReminder: sendReminder
       };
       if (dateTimeModalType === 'appointment') {
+        // Enviar fecha como ISO string (sin Z) para satisfacer validación del backend
+        // pero preservando la fecha local correcta
         options.appointmentDate = isoString;
         options.appointmentTime = formattedTime;
       } else if (dateTimeModalType === 'recontact') {
+        // Enviar fecha como ISO string (sin Z) para satisfacer validación del backend
+        // pero preservando la fecha local correcta
         options.recontactDate = isoString;
         options.recontactTime = formattedTime;
       }
       
-      console.log('🟢 handleSaveDateTime: Fecha ISO string:', isoString);
+      console.log('🟢 handleSaveDateTime: Fecha ISO string (preservando fecha local):', isoString);
       console.log('🟢 handleSaveDateTime: Hora formateada:', formattedTime);
       console.log('🟢 handleSaveDateTime: Opciones:', options);
       
       // Actualizar estado en el backend con fecha y hora
+      console.log('🟢 ========== ENVIANDO AL BACKEND ==========');
+      console.log('🟢 modalLeadId:', modalLeadId);
+      console.log('🟢 backendStatus:', backendStatus);
+      console.log('🟢 Body completo que se envía:', JSON.stringify({ clientStatus: backendStatus, ...options }, null, 2));
+      
       const updatedLead = await facebookLeadsService.updateClientStatus(modalLeadId, backendStatus, options);
       
-      console.log('✅ handleSaveDateTime: Lead actualizado exitosamente:', updatedLead);
-      console.log('✅ handleSaveDateTime: clientStatus actualizado:', updatedLead.clientStatus);
-      console.log('✅ handleSaveDateTime: appointmentDate:', updatedLead.appointmentDate);
-      console.log('✅ handleSaveDateTime: appointmentTime:', updatedLead.appointmentTime);
-      console.log('✅ handleSaveDateTime: recontactDate:', updatedLead.recontactDate);
-      console.log('✅ handleSaveDateTime: recontactTime:', updatedLead.recontactTime);
+      console.log('✅ ========== RESPUESTA DEL BACKEND ==========');
+      console.log('✅ Lead actualizado exitosamente');
+      console.log('✅ updatedLead.appointmentDate (RAW):', updatedLead.appointmentDate);
+      console.log('✅ updatedLead.appointmentDate (tipo):', typeof updatedLead.appointmentDate);
+      console.log('✅ updatedLead.appointmentTime:', updatedLead.appointmentTime);
+      console.log('✅ updatedLead.recontactDate (RAW):', updatedLead.recontactDate);
+      console.log('✅ updatedLead.recontactDate (tipo):', typeof updatedLead.recontactDate);
+      console.log('✅ updatedLead.recontactTime:', updatedLead.recontactTime);
+      
+      // Parsear la fecha que viene del backend para verificar
+      if (updatedLead.appointmentDate) {
+        const parsedBackendDate = parseDateSafely(updatedLead.appointmentDate);
+        console.log('✅ appointmentDate parseado:', parsedBackendDate);
+        console.log('✅ appointmentDate.toLocaleDateString(es-AR):', parsedBackendDate.toLocaleDateString('es-AR'));
+        console.log('✅ appointmentDate.getDate():', parsedBackendDate.getDate());
+      }
+      if (updatedLead.recontactDate) {
+        const parsedBackendDate = parseDateSafely(updatedLead.recontactDate);
+        console.log('✅ recontactDate parseado:', parsedBackendDate);
+        console.log('✅ recontactDate.toLocaleDateString(es-AR):', parsedBackendDate.toLocaleDateString('es-AR'));
+        console.log('✅ recontactDate.getDate():', parsedBackendDate.getDate());
+      }
       console.log('✅ handleSaveDateTime: LLAMANDO REFETCH...');
+      
+      // Registrar evento de Analytics
+      if (dateTimeModalType) {
+        analyticsService.logClientStatusChanged(modalLeadId, dateTimeModalType);
+      }
       
       // Actualizar estado local
       setClientStatuses(prev => ({ ...prev, [modalLeadId]: dateTimeModalType }));
@@ -2283,6 +2644,11 @@ const FacebookLeadsListInner = (
       // Actualizar estado en el backend
       const updatedLead = await facebookLeadsService.updateClientStatus(modalLeadId, backendStatus);
       
+      // Registrar evento de Analytics
+      if (dateTimeModalType) {
+        analyticsService.logClientStatusChanged(modalLeadId, dateTimeModalType);
+      }
+      
       // Actualizar estado local
       setClientStatuses(prev => ({ ...prev, [modalLeadId]: dateTimeModalType }));
       
@@ -2329,6 +2695,8 @@ const FacebookLeadsListInner = (
   };
 
   const handleRequestReview = async (leadId: number) => {
+    analyticsService.logReviewRequested(leadId);
+    
     // Verificar si Google My Business está configurado
     if (!user?.userClientData?.urlgooglemybusiness) {
       // Resetear el flag para permitir un nuevo refresh cuando se abra el modal
@@ -3022,7 +3390,11 @@ const FacebookLeadsListInner = (
                     <Ionicons name="call-outline" size={20} color={colors.primary} />
                     <Text style={styles.actionButtonText}>Llamar</Text>
                   </TouchableOpacity>
-                  {user?.userClientData?.country?.toLowerCase().trim() === 'argentina' ? (
+                  {(() => {
+                    const country = user?.userClientData?.country?.toLowerCase().trim();
+                    const isArgentina = country === 'argentina';
+                    return isArgentina;
+                  })() ? (
                     <TouchableOpacity
                       style={[styles.actionButton, styles.smsButton]}
                       onPress={() => handleSendWhatsApp(lead.id)}
@@ -3068,21 +3440,35 @@ const FacebookLeadsListInner = (
                 {/* Botón de Estado del Cliente */}
                 <View style={{ width: '100%', marginTop: 8 }}>
                   {(() => {
-                    const currentStatus = clientStatuses[lead.id] || (lead.clientStatus ? (() => {
-                      // Mapear del backend al frontend si viene en formato del backend
+                    // Función helper para normalizar el estado del backend al formato del frontend
+                    const normalizeStatus = (status: string | null | undefined): string | null => {
+                      if (!status) return null;
+                      
                       const backendToFrontend: { [key: string]: string } = {
                         'No contestó': 'no-contest',
-                        'No contesto': 'no-contest', // También mapear sin tilde
+                        'No contesto': 'no-contest', // Sin tilde (formato del backend)
                         'Cita Agendada': 'appointment',
                         'Cita agendada': 'appointment',
                         'Por recontactar': 'recontact',
-                        'Por Recontactar': 'recontact', // También mapear con mayúscula
+                        'Por Recontactar': 'recontact',
                         'Vendido': 'estimated-sold',
                         'Servicio completado': 'work-completed',
                       };
-                      return backendToFrontend[lead.clientStatus] || lead.clientStatus;
-                    })() : null);
-                    const statusColor = getStatusColor(currentStatus);
+                      
+                      // Si ya es un código del frontend, devolverlo tal cual
+                      if (['no-contest', 'appointment', 'recontact', 'estimated-sold', 'work-completed'].includes(status)) {
+                        return status;
+                      }
+                      
+                      // Mapear del backend al frontend
+                      return backendToFrontend[status] || null;
+                    };
+                    
+                    // Normalizar el estado desde clientStatuses o desde lead.clientStatus
+                    const rawStatus = clientStatuses[lead.id] || lead.clientStatus;
+                    const currentStatus = normalizeStatus(rawStatus);
+                    
+                    const statusColor = currentStatus ? getStatusColor(currentStatus) : colors.backgroundTertiary;
                     const statusLabel = currentStatus ? getStatusLabel(currentStatus) : 'Estado del cliente';
                     const buttonText = currentStatus ? statusLabel : 'Estado del cliente';
                     const isUpdatingThisLead = updatingStatusKey?.startsWith(`${lead.id}-`);
@@ -3145,32 +3531,56 @@ const FacebookLeadsListInner = (
                     // Verificar cita agendada
                     if (currentStatus === 'appointment' && lead.appointmentDate && lead.appointmentTime) {
                       try {
+                        console.log('📅 ========== RENDER: Mostrando fecha de cita ==========');
+                        console.log('📅 lead.id:', lead.id);
+                        console.log('📅 lead.appointmentDate (RAW):', lead.appointmentDate);
+                        console.log('📅 lead.appointmentDate (tipo):', typeof lead.appointmentDate);
+                        console.log('📅 lead.appointmentTime:', lead.appointmentTime);
+                        
                         // Parsear fecha manualmente para evitar problemas de zona horaria
                         let date: Date;
                         if (typeof lead.appointmentDate === 'string') {
                           // Si viene como string "YYYY-MM-DD" o ISO string
                           if (lead.appointmentDate.includes('T')) {
                             // Es ISO string completo
-                            date = new Date(lead.appointmentDate);
+                            console.log('📅 Es ISO string, parseando...');
+                            // Extraer solo la parte de fecha antes de la T
+                            const datePart = lead.appointmentDate.split('T')[0];
+                            const [year, month, day] = datePart.split('-').map(Number);
+                            date = new Date(year, month - 1, day);
+                            console.log('📅 Fecha parseada (sin UTC):', date);
+                            console.log('📅 Fecha parseada toLocaleDateString:', date.toLocaleDateString('es-AR'));
                           } else {
                             // Es solo fecha "YYYY-MM-DD", parsear manualmente
+                            console.log('📅 Es solo fecha YYYY-MM-DD, parseando manualmente...');
                             const [year, month, day] = lead.appointmentDate.split('-').map(Number);
                             date = new Date(year, month - 1, day);
+                            console.log('📅 Fecha parseada:', date);
+                            console.log('📅 Fecha parseada toLocaleDateString:', date.toLocaleDateString('es-AR'));
                           }
                         } else if (lead.appointmentDate instanceof Date) {
                           date = lead.appointmentDate;
+                          console.log('📅 Ya es Date object:', date);
                         } else {
                           date = new Date(lead.appointmentDate);
+                          console.log('📅 Parseado con new Date():', date);
                         }
+                        
+                        console.log('📅 date final antes de formatear:', date);
+                        console.log('📅 date.getFullYear():', date.getFullYear());
+                        console.log('📅 date.getMonth():', date.getMonth());
+                        console.log('📅 date.getDate():', date.getDate());
                         
                         const formattedDate = date.toLocaleDateString('es-ES', { 
                           day: '2-digit', 
                           month: '2-digit', 
                           year: 'numeric' 
                         });
+                        console.log('📅 formattedDate resultante:', formattedDate);
                         dateTimeText = `Fecha de la cita: ${formattedDate} a las ${lead.appointmentTime}`;
+                        console.log('📅 dateTimeText final:', dateTimeText);
                       } catch (e) {
-                        console.error('Error formateando fecha de cita:', e);
+                        console.error('❌ Error formateando fecha de cita:', e);
                       }
                     }
                     // Verificar fecha de recontacto (verificar independientemente)
@@ -3245,7 +3655,7 @@ const FacebookLeadsListInner = (
                               >
                                 <Ionicons name="create-outline" size={16} color={colors.primary} />
                                 <Text style={{ fontSize: 13, color: colors.primary, fontWeight: '500' }}>
-                                  Modificar
+                                  Editar
                                 </Text>
                               </TouchableOpacity>
                               <TouchableOpacity
@@ -3334,65 +3744,6 @@ const FacebookLeadsListInner = (
                         />
                       </TouchableOpacity>
                     )}
-                  {/* Mostrar fecha y hora si hay cita agendada o por recontactar */}
-                  {(() => {
-                    // Ocultar si el botón está expandido
-                    if (expandedClientStatusInfo === lead.id) {
-                      return null;
-                    }
-                    
-                    const currentStatus = clientStatuses[lead.id] || (lead.clientStatus ? (() => {
-                      const backendToFrontend: { [key: string]: string } = {
-                        'No contestó': 'no-contest',
-                        'Cita Agendada': 'appointment',
-                        'Cita agendada': 'appointment',
-                        'Por recontactar': 'recontact',
-                        'Vendido': 'estimated-sold',
-                        'Servicio completado': 'work-completed',
-                      };
-                      return backendToFrontend[lead.clientStatus] || lead.clientStatus;
-                    })() : null);
-                    
-                    // Verificar si hay fecha y hora para mostrar
-                    let dateTimeText = null;
-                    if (currentStatus === 'appointment' && lead.appointmentDate && lead.appointmentTime) {
-                      try {
-                        const date = new Date(lead.appointmentDate);
-                        const formattedDate = date.toLocaleDateString('es-ES', { 
-                          day: '2-digit', 
-                          month: '2-digit', 
-                          year: 'numeric' 
-                        });
-                        dateTimeText = `Fecha de la cita: ${formattedDate} a las ${lead.appointmentTime}`;
-                      } catch (e) {
-                        console.error('Error formateando fecha de cita:', e);
-                      }
-                    } else if (currentStatus === 'recontact' && lead.recontactDate && lead.recontactTime) {
-                      try {
-                        const date = new Date(lead.recontactDate);
-                        const formattedDate = date.toLocaleDateString('es-ES', { 
-                          day: '2-digit', 
-                          month: '2-digit', 
-                          year: 'numeric' 
-                        });
-                        dateTimeText = `Fecha de recontacto: ${formattedDate} a las ${lead.recontactTime}`;
-                      } catch (e) {
-                        console.error('Error formateando fecha de recontacto:', e);
-                      }
-                    }
-                    
-                    if (dateTimeText) {
-                      return (
-                        <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 8, gap: 6 }}>
-                          <Ionicons name="calendar-outline" size={16} color={colors.textPrimary} />
-                          <Text style={[styles.infoText, { fontSize: 14, color: colors.textPrimary }]}>
-                            {dateTimeText}
-                          </Text>
-                        </View>
-                      );
-                    }
-                    return null;
-                  })()}
                     <View style={styles.twoButtonsRow}>
                       <TouchableOpacity
                         style={[styles.menuItem, styles.reviewButton]}
@@ -3437,14 +3788,14 @@ const FacebookLeadsListInner = (
                   
                   // Calcular altura dinámicamente basada en el número de opciones
                   // Hay 5 opciones totales, pero se filtra la actual, quedan máximo 4
-                  // Cada menuItem tiene ~44px (paddingVertical 12*2 + contenido ~20)
+                  // Cada menuItem tiene ~52px (paddingVertical 12*2 + contenido ~28 para textos largos como "Servicio completado")
                   // gap entre items es 8px (definido en quickResponseContent)
-                  // 4 opciones * 44px = 176px + 3 gaps * 8px = 24px = 200px
+                  // 4 opciones * 52px = 208px + 3 gaps * 8px = 24px = 232px
                   // Agregamos más espacio extra para asegurar que todas las opciones quepan, especialmente "Servicio completado"
                   const maxOptions = 4; // Máximo de opciones que se pueden mostrar
-                  const menuItemHeight = 44;
+                  const menuItemHeight = 52; // Aumentado para acomodar textos largos
                   const gapSize = 8;
-                  const calculatedHeight = (maxOptions * menuItemHeight) + ((maxOptions - 1) * gapSize) + 50; // +50px extra para asegurar que quepa todo, incluyendo "Servicio completado"
+                  const calculatedHeight = (maxOptions * menuItemHeight) + ((maxOptions - 1) * gapSize) + 60; // +60px extra para asegurar que quepa todo, incluyendo "Servicio completado"
                   
                   const statusHeight = clientStatusInfoHeights.current[lead.id].interpolate({
                     inputRange: [0, 1],
@@ -3462,20 +3813,36 @@ const FacebookLeadsListInner = (
                     >
                       <View style={[styles.quickResponseContent, { paddingBottom: 8 }]}>
                         {(() => {
-                          const currentStatus = clientStatuses[lead.id] || (lead.clientStatus ? (() => {
+                          // Función helper para normalizar el estado del backend al formato del frontend
+                          const normalizeStatus = (status: string | null | undefined): string | null => {
+                            if (!status) return null;
+                            
                             const backendToFrontend: { [key: string]: string } = {
                               'No contestó': 'no-contest',
+                              'No contesto': 'no-contest', // Sin tilde (formato del backend)
                               'Cita Agendada': 'appointment',
                               'Cita agendada': 'appointment',
                               'Por recontactar': 'recontact',
+                              'Por Recontactar': 'recontact',
                               'Vendido': 'estimated-sold',
                               'Servicio completado': 'work-completed',
                             };
-                            return backendToFrontend[lead.clientStatus] || lead.clientStatus;
-                          })() : null);
+                            
+                            // Si ya es un código del frontend, devolverlo tal cual
+                            if (['no-contest', 'appointment', 'recontact', 'estimated-sold', 'work-completed'].includes(status)) {
+                              return status;
+                            }
+                            
+                            // Mapear del backend al frontend
+                            return backendToFrontend[status] || null;
+                          };
+                          
+                          // Normalizar el estado desde clientStatuses o desde lead.clientStatus
+                          const rawStatus = clientStatuses[lead.id] || lead.clientStatus;
+                          const currentStatus = normalizeStatus(rawStatus);
                           
                           const statusOptions = [
-                            { key: 'no-contest', label: 'No contestó', style: styles.statusButtonNoContest },
+                            { key: 'no-contest', label: 'No contesto', style: styles.statusButtonNoContest }, // Sin tilde
                             { key: 'appointment', label: 'Cita agendada', style: styles.statusButtonAppointment },
                             { key: 'recontact', label: 'Por recontactar', style: styles.statusButtonRecontact },
                             { key: 'estimated-sold', label: 'Vendido', style: styles.statusButtonEstimatedSold },
@@ -3612,7 +3979,19 @@ const FacebookLeadsListInner = (
               </TouchableOpacity>
             </View>
             
-            <ScrollView style={styles.modalContent} showsVerticalScrollIndicator={true}>
+            {modalError && (
+              <View style={styles.modalErrorContainer}>
+                <Ionicons name="alert-circle" size={18} color={colors.error} />
+                <Text style={styles.modalErrorText}>{modalError}</Text>
+              </View>
+            )}
+            
+            <ScrollView 
+              style={styles.modalContent} 
+              contentContainerStyle={styles.modalContentContainer}
+              showsVerticalScrollIndicator={true}
+              nestedScrollEnabled={true}
+            >
               <Text style={styles.modalText} selectable={true}>{modalContent}</Text>
             </ScrollView>
 
@@ -3672,6 +4051,128 @@ const FacebookLeadsListInner = (
         </View>
       </Modal>
 
+      {/* Modal para seleccionar número de teléfono cuando hay dos números diferentes */}
+      <Modal
+        visible={phoneSelectionModalVisible && availablePhones.length >= 2}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => {
+          setPhoneSelectionModalVisible(false);
+          setAvailablePhones([]);
+          setPendingSendAction(null);
+          pendingSendActionRef.current = null;
+          setErrorMessage(null);
+        }}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContainer}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Seleccionar número de teléfono</Text>
+              <TouchableOpacity 
+                onPress={() => {
+                  setPhoneSelectionModalVisible(false);
+                  setAvailablePhones([]);
+                  setPendingSendAction(null);
+                  pendingSendActionRef.current = null;
+                  setErrorMessage(null);
+                }} 
+                style={styles.modalCloseButton}
+              >
+                <Ionicons name="close-outline" size={24} color={colors.textPrimary} />
+              </TouchableOpacity>
+            </View>
+            
+            <View style={styles.modalContent}>
+              <Text style={styles.modalText}>
+                Este contacto tiene dos números diferentes. ¿A cuál quieres enviar el mensaje?
+              </Text>
+              
+              <View style={{ gap: 12, marginTop: 16 }}>
+                {availablePhones.map((phoneOption, index) => (
+                  <TouchableOpacity
+                    key={index}
+                    style={[styles.modalActionButton, styles.sendButton, styles.fullWidthButton]}
+                    onPress={() => {
+                      console.log('📱 ========== BOTÓN PRESIONADO ==========');
+                      console.log('📱 phoneOption.label:', phoneOption.label);
+                      console.log('📱 phoneOption.phone:', phoneOption.phone);
+                      console.log('📱 phoneOption.phone.trim():', phoneOption.phone?.trim());
+                      console.log('📱 pendingSendAction (estado) tipo:', typeof pendingSendAction);
+                      console.log('📱 pendingSendAction (estado) valor:', pendingSendAction);
+                      console.log('📱 pendingSendAction (estado) existe?', !!pendingSendAction);
+                      console.log('📱 pendingSendActionRef.current tipo:', typeof pendingSendActionRef.current);
+                      console.log('📱 pendingSendActionRef.current valor:', pendingSendActionRef.current);
+                      console.log('📱 pendingSendActionRef.current existe?', !!pendingSendActionRef.current);
+                      console.log('📱 modalContent disponible?', !!modalContent);
+                      console.log('📱 modalContent length:', modalContent?.length || 0);
+                      console.log('📱 phoneSelectionModalVisible:', phoneSelectionModalVisible);
+                      console.log('📱 availablePhones.length:', availablePhones.length);
+                      
+                      // Usar el ref primero, si no está disponible usar el estado
+                      const actionToExecute = pendingSendActionRef.current || pendingSendAction;
+                      console.log('📱 actionToExecute seleccionada:', !!actionToExecute);
+                      console.log('📱 actionToExecute tipo:', typeof actionToExecute);
+                      
+                      if (actionToExecute && phoneOption.phone && phoneOption.phone.trim()) {
+                        try {
+                          console.log('📱 Ejecutando acción de envío con:', phoneOption.phone);
+                          actionToExecute(phoneOption.phone);
+                          console.log('✅ Acción de envío ejecutada');
+                          // Cerrar el modal después de un pequeño delay
+                          setTimeout(() => {
+                            setPhoneSelectionModalVisible(false);
+                            setAvailablePhones([]);
+                            setPendingSendAction(null);
+                            pendingSendActionRef.current = null;
+                            setErrorMessage(null);
+                          }, 300);
+                        } catch (error) {
+                          console.error('❌ Error al enviar mensaje:', error);
+                          setErrorMessage('Error al enviar el mensaje');
+                          setTimeout(() => setErrorMessage(null), 5000);
+                        }
+                      } else {
+                        console.warn('⚠️ Intento de enviar sin número válido o sin acción de envío');
+                        if (!actionToExecute) {
+                          setErrorMessage('Error: No se pudo ejecutar la acción de envío');
+                          setTimeout(() => setErrorMessage(null), 5000);
+                        }
+                      }
+                    }}
+                    activeOpacity={0.7}
+                  >
+                    <Ionicons name="call-outline" size={20} color="#fff" />
+                    <View style={{ flex: 1, marginLeft: 8 }}>
+                      <Text style={styles.modalActionButtonText}>{phoneOption.label}</Text>
+                      <Text style={[styles.modalActionButtonText, { fontSize: 12, opacity: 0.9 }]}>
+                        {phoneOption.phone}
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+
+            <View style={styles.modalActions}>
+              <TouchableOpacity
+                style={[styles.modalActionButton, styles.closeButton, styles.fullWidthButton]}
+                onPress={() => {
+                  setPhoneSelectionModalVisible(false);
+                  setAvailablePhones([]);
+                  setPendingSendAction(null);
+                  pendingSendActionRef.current = null;
+                  setErrorMessage(null);
+                }}
+                activeOpacity={0.7}
+              >
+                <Ionicons name="close-outline" size={20} color="#fff" />
+                <Text style={styles.modalActionButtonText}>Cancelar</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       {/* Modal para fecha y hora */}
       <Modal
         visible={dateTimeModalVisible}
@@ -3704,7 +4205,7 @@ const FacebookLeadsListInner = (
               </TouchableOpacity>
             </View>
             
-            <View style={styles.modalContent}>
+            <View style={[styles.modalContent, styles.modalContentContainer]}>
               <View style={styles.dateTimeInputContainer}>
                 <Text style={styles.dateTimeLabel}>Fecha:</Text>
                 {Platform.OS === 'web' ? (
@@ -3715,7 +4216,21 @@ const FacebookLeadsListInner = (
                     onChange={(e: any) => {
                       const dateValue = e.target.value;
                       if (dateValue) {
-                        setSelectedDate(new Date(dateValue));
+                        // Parsear manualmente para evitar problemas de zona horaria
+                        // dateValue viene como "YYYY-MM-DD"
+                        const [year, month, day] = dateValue.split('-').map(Number);
+                        // Crear fecha en zona horaria local (no UTC)
+                        const newDate = new Date(year, month - 1, day);
+                        console.log('📅 Web date input onChange:', {
+                          dateValue,
+                          year,
+                          month,
+                          day,
+                          newDate: newDate.toString(),
+                          newDateLocal: newDate.toLocaleDateString('es-AR'),
+                          newDateGetDate: newDate.getDate(),
+                        });
+                        setSelectedDate(newDate);
                       }
                     }}
                     onFocus={() => setDateInputFocused(true)}
@@ -3752,7 +4267,22 @@ const FacebookLeadsListInner = (
                         onChange={(event: any, date?: Date) => {
                           setShowDatePicker(Platform.OS === 'ios');
                           if (date) {
-                            setSelectedDate(date);
+                            // Normalizar la fecha para que tenga hora 00:00:00 en zona horaria local
+                            // Esto evita problemas cuando el DateTimePicker devuelve una fecha con hora específica
+                            const year = date.getFullYear();
+                            const month = date.getMonth();
+                            const day = date.getDate();
+                            const localDate = new Date(year, month, day);
+                            console.log('📅 DateTimePicker onChange:', {
+                              dateOriginal: date.toString(),
+                              dateLocal: date.toLocaleDateString('es-AR'),
+                              year,
+                              month,
+                              day,
+                              localDate: localDate.toString(),
+                              localDateGetDate: localDate.getDate(),
+                            });
+                            setSelectedDate(localDate);
                           }
                         }}
                         minimumDate={new Date()}
@@ -3906,7 +4436,7 @@ const FacebookLeadsListInner = (
               </TouchableOpacity>
             </View>
             
-            <View style={styles.modalContent}>
+            <View style={[styles.modalContent, styles.modalContentContainer]}>
               <Text style={styles.modalText}>
                 ¿Estás seguro de que quieres eliminar la fecha y hora de {deleteDateTimeType === 'appointment' ? 'cita agendada' : 'recontacto'}?
               </Text>
@@ -4002,7 +4532,12 @@ const FacebookLeadsListInner = (
               </TouchableOpacity>
             </View>
             
-            <ScrollView style={styles.modalContent} showsVerticalScrollIndicator={true}>
+            <ScrollView 
+              style={styles.modalContent} 
+              contentContainerStyle={styles.modalContentContainer}
+              showsVerticalScrollIndicator={true}
+              nestedScrollEnabled={true}
+            >
               <Text style={[styles.modalText, { marginBottom: 16 }]}>
                 Se le enviará un email al cliente con el siguiente contenido:
               </Text>
@@ -4732,6 +5267,7 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.3,
     shadowRadius: 12,
     elevation: 8,
+    flexDirection: 'column',
   },
   modalHeader: {
     flexDirection: 'row',
@@ -4750,8 +5286,13 @@ const styles = StyleSheet.create({
     padding: 4,
   },
   modalContent: {
+    flexGrow: 0,
+    flexShrink: 1,
     maxHeight: 400,
+  },
+  modalContentContainer: {
     padding: 20,
+    flexGrow: 1,
   },
   modalText: {
     fontSize: 15,
@@ -4943,6 +5484,8 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     color: colors.textPrimary,
     flex: 1,
+    flexWrap: 'wrap',
+    textAlign: 'center',
   },
   statusButtonNoContest: {
     backgroundColor: '#fca5a5', // Rojo medio
@@ -5013,5 +5556,24 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 15,
     fontWeight: '600',
+  },
+  modalErrorContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: colors.error + '10',
+    borderColor: colors.error + '30',
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 12,
+    marginHorizontal: 16,
+    marginTop: 8,
+    marginBottom: 8,
+  },
+  modalErrorText: {
+    color: colors.error,
+    fontSize: 14,
+    fontWeight: '500',
+    flex: 1,
   },
 });

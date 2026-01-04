@@ -12,6 +12,7 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../theme/colors';
 import { useDebugLog } from '../context/DebugLogContext';
+import { analyticsService } from '../services/analyticsService';
 
 const isMobile = Platform.OS !== 'web';
 
@@ -83,11 +84,13 @@ export const FacebookLeadsPage: React.FC<FacebookLeadsPageProps> = ({ leadId }) 
   // Este componente solo recibe el leadId como prop desde dashboard.tsx
 
   const handleEdit = (lead: FacebookLead) => {
+    analyticsService.logLeadEditInitiated(lead.id);
     setEditingLead(lead);
     setShowForm(true);
   };
 
   const handleNew = () => {
+    analyticsService.logAddLeadInitiated();
     setEditingLead(null);
     setShowForm(true);
   };
@@ -284,9 +287,16 @@ export const FacebookLeadsPage: React.FC<FacebookLeadsPageProps> = ({ leadId }) 
           onToggleNotifications={toggleNotifications}
           aiMessageInstructions={aiMessageInstructions}
           messagesUpdating={messagesUpdating}
-          onOpenMessages={() => setShowMessagesModal(true)}
-          onOpenNotifications={() => setShowNotificationsModal(true)}
+          onOpenMessages={() => {
+            analyticsService.logMessagesOpened();
+            setShowMessagesModal(true);
+          }}
+          onOpenNotifications={() => {
+            analyticsService.logNotificationsOpened();
+            setShowNotificationsModal(true);
+          }}
           onUpdateMessagesCache={async () => {
+            analyticsService.logCacheUpdated();
             console.log('📢 FacebookLeadsPage.onUpdateMessagesCache - INICIANDO');
             console.log('📢 FacebookLeadsPage.onUpdateMessagesCache - listRef.current:', !!listRef.current);
             try {
@@ -374,6 +384,7 @@ export const FacebookLeadsPage: React.FC<FacebookLeadsPageProps> = ({ leadId }) 
                   <TouchableOpacity
                     style={styles.menuItem}
                     onPress={async () => {
+                      analyticsService.logCacheUpdated();
                       console.log('📢 FacebookLeadsPage - Menú desktop: Click en Actualizar');
                       try {
                         setShowUserMenu(false);
