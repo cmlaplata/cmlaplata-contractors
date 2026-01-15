@@ -29,6 +29,7 @@ export const FacebookLeadsPage: React.FC<FacebookLeadsPageProps> = ({ leadId }) 
   const [showLogoutModal, setShowLogoutModal] = useState(false);
   const [showNotificationsModal, setShowNotificationsModal] = useState(false);
   const [showMessagesModal, setShowMessagesModal] = useState(false);
+  const [showButtonsModal, setShowButtonsModal] = useState(false);
   const [messagesInstructions, setMessagesInstructions] = useState('');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const listRef = useRef<FacebookLeadsListRef>(null);
@@ -63,9 +64,11 @@ export const FacebookLeadsPage: React.FC<FacebookLeadsPageProps> = ({ leadId }) 
 
   const {
     aiMessageInstructions,
+    setWhatsapp,
     loading: messagesLoading,
     updating: messagesUpdating,
     updateMessageInstructions,
+    updateSetWhatsapp,
   } = useClientMessages(user?.clientId);
 
   // Sincronizar el estado local con el valor del hook cuando cambia
@@ -268,6 +271,7 @@ export const FacebookLeadsPage: React.FC<FacebookLeadsPageProps> = ({ leadId }) 
           clientStatusFilter={clientStatusFilter}
           onClientStatusFilterChange={setClientStatusFilter}
           onViewAllContacts={() => router.replace('/(tabs)/dashboard')}
+          setWhatsappConfig={setWhatsapp}
         />
       )}
 
@@ -290,6 +294,9 @@ export const FacebookLeadsPage: React.FC<FacebookLeadsPageProps> = ({ leadId }) 
           onOpenMessages={() => {
             analyticsService.logMessagesOpened();
             setShowMessagesModal(true);
+          }}
+          onOpenButtons={() => {
+            setShowButtonsModal(true);
           }}
           onOpenNotifications={() => {
             analyticsService.logNotificationsOpened();
@@ -379,6 +386,23 @@ export const FacebookLeadsPage: React.FC<FacebookLeadsPageProps> = ({ leadId }) 
                     />
                     <Text style={[styles.menuItemText, { color: '#fff' }]}>
                       Mensajes
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.menuItem}
+                    onPress={() => {
+                      setShowUserMenu(false);
+                      setShowButtonsModal(true);
+                    }}
+                    activeOpacity={0.7}
+                  >
+                    <Ionicons 
+                      name="phone-portrait-outline" 
+                      size={20} 
+                      color="#fff" 
+                    />
+                    <Text style={[styles.menuItemText, { color: '#fff' }]}>
+                      Botones
                     </Text>
                   </TouchableOpacity>
                   <TouchableOpacity
@@ -624,6 +648,124 @@ export const FacebookLeadsPage: React.FC<FacebookLeadsPageProps> = ({ leadId }) 
                 <Text style={styles.notificationsModalButtonConfirmText}>
                   {messagesUpdating ? 'Guardando...' : 'Guardar'}
                 </Text>
+              </TouchableOpacity>
+            </View>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* Modal de configuración de botones */}
+      <Modal
+        visible={showButtonsModal}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setShowButtonsModal(false)}
+      >
+        <TouchableOpacity
+          style={styles.notificationsModalOverlay}
+          activeOpacity={1}
+          onPress={() => setShowButtonsModal(false)}
+        >
+          <TouchableOpacity
+            style={styles.notificationsModalContainer}
+            activeOpacity={1}
+            onPress={(e) => e.stopPropagation()}
+          >
+            <View style={styles.notificationsModalHeader}>
+              <Ionicons
+                name="phone-portrait-outline"
+                size={32}
+                color="#FFFFFF"
+              />
+              <Text style={styles.notificationsModalTitle}>Botones</Text>
+            </View>
+
+            <Text style={styles.messagesModalDescription}>
+              Botón a mostrar:
+            </Text>
+
+            {errorMessage && (
+              <View style={styles.errorMessageContainer}>
+                <Ionicons name="alert-circle" size={18} color={colors.error} />
+                <Text style={styles.errorMessageText}>{errorMessage}</Text>
+              </View>
+            )}
+
+            <View style={styles.radioButtonContainer}>
+              <TouchableOpacity
+                style={styles.radioButton}
+                onPress={async () => {
+                  try {
+                    if (updateSetWhatsapp) {
+                      await updateSetWhatsapp('hidden');
+                    }
+                  } catch (err) {
+                    console.error('Error al actualizar configuración de botones:', err);
+                    setErrorMessage('No se pudo actualizar la configuración de botones');
+                    setTimeout(() => setErrorMessage(null), 5000);
+                  }
+                }}
+                disabled={messagesUpdating}
+                activeOpacity={0.7}
+              >
+                <View style={styles.radioButtonCircle}>
+                  {setWhatsapp === 'hidden' && <View style={styles.radioButtonInner} />}
+                </View>
+                <Text style={styles.radioButtonText}>SMS</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.radioButton}
+                onPress={async () => {
+                  try {
+                    if (updateSetWhatsapp) {
+                      await updateSetWhatsapp('show');
+                    }
+                  } catch (err) {
+                    console.error('Error al actualizar configuración de botones:', err);
+                    setErrorMessage('No se pudo actualizar la configuración de botones');
+                    setTimeout(() => setErrorMessage(null), 5000);
+                  }
+                }}
+                disabled={messagesUpdating}
+                activeOpacity={0.7}
+              >
+                <View style={styles.radioButtonCircle}>
+                  {setWhatsapp === 'show' && <View style={styles.radioButtonInner} />}
+                </View>
+                <Text style={styles.radioButtonText}>WhatsApp</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.radioButton}
+                onPress={async () => {
+                  try {
+                    if (updateSetWhatsapp) {
+                      await updateSetWhatsapp('both');
+                    }
+                  } catch (err) {
+                    console.error('Error al actualizar configuración de botones:', err);
+                    setErrorMessage('No se pudo actualizar la configuración de botones');
+                    setTimeout(() => setErrorMessage(null), 5000);
+                  }
+                }}
+                disabled={messagesUpdating}
+                activeOpacity={0.7}
+              >
+                <View style={styles.radioButtonCircle}>
+                  {setWhatsapp === 'both' && <View style={styles.radioButtonInner} />}
+                </View>
+                <Text style={styles.radioButtonText}>Ambos</Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.notificationsModalButtons}>
+              <TouchableOpacity
+                style={[styles.notificationsModalButton, styles.notificationsModalButtonCancel]}
+                onPress={() => setShowButtonsModal(false)}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.notificationsModalButtonCancelText}>Cerrar</Text>
               </TouchableOpacity>
             </View>
           </TouchableOpacity>
@@ -1063,6 +1205,39 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 15,
     fontWeight: '600',
+  },
+  radioButtonContainer: {
+    marginBottom: 24,
+  },
+  radioButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    marginBottom: 12,
+    borderRadius: 8,
+    backgroundColor: colors.backgroundTertiary,
+  },
+  radioButtonCircle: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: colors.primary,
+    marginRight: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  radioButtonInner: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: colors.primary,
+  },
+  radioButtonText: {
+    fontSize: 16,
+    color: colors.textPrimary,
+    fontWeight: '500',
   },
   messagesTextInput: {
     backgroundColor: colors.backgroundTertiary,

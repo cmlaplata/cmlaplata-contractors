@@ -116,15 +116,75 @@ export const useClientMessages = (clientId: number | null | undefined) => {
     }
   }, [clientId]);
 
+  const updateSetWhatsapp = async (setWhatsapp: 'show' | 'both' | 'hidden') => {
+    if (!clientId) {
+      throw new Error('No hay clientId disponible');
+    }
+
+    const authMethod = await AsyncStorage.getItem('auth_method');
+    let isAuthenticated = false;
+    
+    if (authMethod === 'phone') {
+      const apiToken = await AsyncStorage.getItem('api_auth_token');
+      isAuthenticated = !!apiToken;
+    } else if (authMethod === 'firebase') {
+      let user = auth.currentUser;
+      if (!user) {
+        await new Promise(resolve => setTimeout(resolve, 300));
+        user = auth.currentUser;
+      }
+      isAuthenticated = !!user;
+    } else {
+      isAuthenticated = !!auth.currentUser;
+    }
+    
+    if (!isAuthenticated) {
+      const errorMsg = 'No estás autenticado. Por favor, inicia sesión nuevamente.';
+      setError(errorMsg);
+      throw new Error(errorMsg);
+    }
+
+    let currentClient = client;
+    if (!currentClient) {
+      try {
+        currentClient = await clientService.getById(clientId);
+        setClient(currentClient);
+      } catch (err: any) {
+        currentClient = { id: clientId, businessName: '', aiMessageInstructions: '', setWhatsapp: 'both' } as Client;
+      }
+    }
+
+    try {
+      setUpdating(true);
+      setError(null);
+      
+      const updatedClient = await clientService.update(clientId, {
+        setWhatsapp: setWhatsapp,
+      });
+      
+      setClient(updatedClient);
+      return updatedClient;
+    } catch (err: any) {
+      const errorMessage = err.response?.data?.message || 'Error al actualizar configuración de botones';
+      setError(errorMessage);
+      throw new Error(errorMessage);
+    } finally {
+      setUpdating(false);
+    }
+  };
+
   const aiMessageInstructions = client?.aiMessageInstructions || '';
+  const setWhatsapp = client?.setWhatsapp || 'both';
 
   return {
     client,
     aiMessageInstructions,
+    setWhatsapp,
     loading,
     updating,
     error,
     updateMessageInstructions,
+    updateSetWhatsapp,
     refetch: fetchClient,
   };
 };

@@ -28,6 +28,7 @@ interface FacebookLeadsListProps {
   clientStatusFilter?: string; // Filtro por estado de cliente ('all', 'no-contest', 'appointment', etc.)
   onClientStatusFilterChange?: (filter: string) => void; // Callback para cambiar el filtro de estado
   onViewAllContacts?: () => void; // Callback para ver todos los contactos
+  setWhatsappConfig?: 'show' | 'both' | 'hidden'; // Configuración de botones WhatsApp/SMS
 }
 
 export interface FacebookLeadsListRef {
@@ -38,7 +39,7 @@ export interface FacebookLeadsListRef {
 }
 
 const FacebookLeadsListInner = (
-  { onEdit, onNew, filterLeadId, searchQuery: externalSearchQuery, clientStatusFilter = 'all', onClientStatusFilterChange, onViewAllContacts }: FacebookLeadsListProps, 
+  { onEdit, onNew, filterLeadId, searchQuery: externalSearchQuery, clientStatusFilter = 'all', onClientStatusFilterChange, onViewAllContacts, setWhatsappConfig }: FacebookLeadsListProps, 
   ref: React.ForwardedRef<FacebookLeadsListRef>
 ) => {
   // Control para mostrar/ocultar logs de debug
@@ -3357,6 +3358,36 @@ const FacebookLeadsListInner = (
                         <Text style={styles.infoText}>{lead.extraInfo}</Text>
                       </View>
                     )}
+                    {lead.extraData1 && (
+                      <View style={styles.infoRow}>
+                        <Ionicons name="book-outline" size={16} color={colors.textSecondary} />
+                        <Text style={styles.infoText}>{lead.extraData1}</Text>
+                      </View>
+                    )}
+                    {lead.extraData2 && (
+                      <View style={styles.infoRow}>
+                        <Ionicons name="book-outline" size={16} color={colors.textSecondary} />
+                        <Text style={styles.infoText}>{lead.extraData2}</Text>
+                      </View>
+                    )}
+                    {lead.extraData3 && (
+                      <View style={styles.infoRow}>
+                        <Ionicons name="book-outline" size={16} color={colors.textSecondary} />
+                        <Text style={styles.infoText}>{lead.extraData3}</Text>
+                      </View>
+                    )}
+                    {lead.extraData4 && (
+                      <View style={styles.infoRow}>
+                        <Ionicons name="book-outline" size={16} color={colors.textSecondary} />
+                        <Text style={styles.infoText}>{lead.extraData4}</Text>
+                      </View>
+                    )}
+                    {lead.extraData5 && (
+                      <View style={styles.infoRow}>
+                        <Ionicons name="book-outline" size={16} color={colors.textSecondary} />
+                        <Text style={styles.infoText}>{lead.extraData5}</Text>
+                      </View>
+                    )}
                     {lead.createdAt && (
                       <View style={styles.infoRow}>
                         <Ionicons name="time-outline" size={16} color={colors.textSecondary} />
@@ -3380,63 +3411,126 @@ const FacebookLeadsListInner = (
                     </TouchableOpacity>
                   </View>
                 </View>
-                <View style={styles.actionButtonsRow}>
-                  <TouchableOpacity
-                    style={[styles.actionButton, styles.callButton]}
-                    onPress={() => handleCallLead(lead.phone || lead.phoneManual || lead.phoneAuto || '')}
-                    disabled={!lead.phone && !lead.phoneManual && !lead.phoneAuto}
-                    activeOpacity={0.7}
-                  >
-                    <Ionicons name="call-outline" size={20} color={colors.primary} />
-                    <Text style={styles.actionButtonText}>Llamar</Text>
-                  </TouchableOpacity>
-                  {(() => {
-                    const country = user?.userClientData?.country?.toLowerCase().trim();
-                    const isArgentina = country === 'argentina';
-                    return isArgentina;
-                  })() ? (
-                    <TouchableOpacity
-                      style={[styles.actionButton, styles.smsButton]}
-                      onPress={() => handleSendWhatsApp(lead.id)}
-                      disabled={generatingWhatsApp === lead.id || (!lead.phone && !lead.phoneManual && !lead.phoneAuto)}
-                      activeOpacity={0.7}
-                    >
-                      {generatingWhatsApp === lead.id ? (
-                        <ActivityIndicator size="small" color={colors.primary} />
+                {(() => {
+                  const setWhatsapp = setWhatsappConfig || user?.userClientData?.setWhatsapp || 'both';
+                  
+                  // Si es 'both', mostrar en dos filas: Llamar+Email arriba, SMS+WhatsApp abajo
+                  if (setWhatsapp === 'both') {
+                    return (
+                      <>
+                        <View style={styles.actionButtonsRow}>
+                          <TouchableOpacity
+                            style={[styles.actionButton, styles.callButton]}
+                            onPress={() => handleCallLead(lead.phone || lead.phoneManual || lead.phoneAuto || '')}
+                            disabled={!lead.phone && !lead.phoneManual && !lead.phoneAuto}
+                            activeOpacity={0.7}
+                          >
+                            <Ionicons name="call-outline" size={20} color={colors.primary} />
+                            <Text style={styles.actionButtonText}>Llamar</Text>
+                          </TouchableOpacity>
+                          <TouchableOpacity
+                            style={[styles.actionButton, styles.emailButton]}
+                            onPress={() => handleSendEmail(lead.id)}
+                            disabled={generatingEmail === lead.id}
+                            activeOpacity={0.7}
+                          >
+                            {generatingEmail === lead.id ? (
+                              <ActivityIndicator size="small" color={colors.primary} />
+                            ) : (
+                              <Ionicons name="mail-outline" size={20} color={colors.primary} />
+                            )}
+                            <Text style={styles.actionButtonText}>Email</Text>
+                          </TouchableOpacity>
+                        </View>
+                        <View style={[styles.actionButtonsRow, { marginTop: 8 }]}>
+                          <TouchableOpacity
+                            style={[styles.actionButton, styles.smsButton]}
+                            onPress={() => handleText(lead.id)}
+                            disabled={generatingSMS === lead.id}
+                            activeOpacity={0.7}
+                          >
+                            {generatingSMS === lead.id ? (
+                              <ActivityIndicator size="small" color={colors.primary} />
+                            ) : (
+                              <Ionicons name="chatbubble-outline" size={20} color={colors.primary} />
+                            )}
+                            <Text style={styles.actionButtonText}>SMS</Text>
+                          </TouchableOpacity>
+                          <TouchableOpacity
+                            style={[styles.actionButton, styles.smsButton]}
+                            onPress={() => handleSendWhatsApp(lead.id)}
+                            disabled={generatingWhatsApp === lead.id || (!lead.phone && !lead.phoneManual && !lead.phoneAuto)}
+                            activeOpacity={0.7}
+                          >
+                            {generatingWhatsApp === lead.id ? (
+                              <ActivityIndicator size="small" color={colors.primary} />
+                            ) : (
+                              <Ionicons name="logo-whatsapp" size={20} color={colors.primary} />
+                            )}
+                            <Text style={styles.actionButtonText}>Whats</Text>
+                          </TouchableOpacity>
+                        </View>
+                      </>
+                    );
+                  }
+                  
+                  // Para 'show' o 'hidden', una sola fila con todos los botones
+                  return (
+                    <View style={styles.actionButtonsRow}>
+                      <TouchableOpacity
+                        style={[styles.actionButton, styles.callButton]}
+                        onPress={() => handleCallLead(lead.phone || lead.phoneManual || lead.phoneAuto || '')}
+                        disabled={!lead.phone && !lead.phoneManual && !lead.phoneAuto}
+                        activeOpacity={0.7}
+                      >
+                        <Ionicons name="call-outline" size={20} color={colors.primary} />
+                        <Text style={styles.actionButtonText}>Llamar</Text>
+                      </TouchableOpacity>
+                      {setWhatsapp === 'show' ? (
+                        <TouchableOpacity
+                          style={[styles.actionButton, styles.smsButton]}
+                          onPress={() => handleSendWhatsApp(lead.id)}
+                          disabled={generatingWhatsApp === lead.id || (!lead.phone && !lead.phoneManual && !lead.phoneAuto)}
+                          activeOpacity={0.7}
+                        >
+                          {generatingWhatsApp === lead.id ? (
+                            <ActivityIndicator size="small" color={colors.primary} />
+                          ) : (
+                            <Ionicons name="logo-whatsapp" size={20} color={colors.primary} />
+                          )}
+                          <Text style={styles.actionButtonText}>Whats</Text>
+                        </TouchableOpacity>
                       ) : (
-                        <Ionicons name="logo-whatsapp" size={20} color={colors.primary} />
+                        <TouchableOpacity
+                          style={[styles.actionButton, styles.smsButton]}
+                          onPress={() => handleText(lead.id)}
+                          disabled={generatingSMS === lead.id}
+                          activeOpacity={0.7}
+                        >
+                          {generatingSMS === lead.id ? (
+                            <ActivityIndicator size="small" color={colors.primary} />
+                          ) : (
+                            <Ionicons name="chatbubble-outline" size={20} color={colors.primary} />
+                          )}
+                          <Text style={styles.actionButtonText}>SMS</Text>
+                        </TouchableOpacity>
                       )}
-                      <Text style={styles.actionButtonText}>Whats</Text>
-                    </TouchableOpacity>
-                  ) : (
-                    <TouchableOpacity
-                      style={[styles.actionButton, styles.smsButton]}
-                      onPress={() => handleText(lead.id)}
-                      disabled={generatingSMS === lead.id}
-                      activeOpacity={0.7}
-                    >
-                      {generatingSMS === lead.id ? (
-                        <ActivityIndicator size="small" color={colors.primary} />
-                      ) : (
-                        <Ionicons name="chatbubble-outline" size={20} color={colors.primary} />
-                      )}
-                      <Text style={styles.actionButtonText}>SMS</Text>
-                    </TouchableOpacity>
-                  )}
-                  <TouchableOpacity
-                    style={[styles.actionButton, styles.emailButton]}
-                    onPress={() => handleSendEmail(lead.id)}
-                    disabled={generatingEmail === lead.id}
-                    activeOpacity={0.7}
-                  >
-                    {generatingEmail === lead.id ? (
-                      <ActivityIndicator size="small" color={colors.primary} />
-                    ) : (
-                      <Ionicons name="mail-outline" size={20} color={colors.primary} />
-                    )}
-                    <Text style={styles.actionButtonText}>Email</Text>
-                  </TouchableOpacity>
-                </View>
+                      <TouchableOpacity
+                        style={[styles.actionButton, styles.emailButton]}
+                        onPress={() => handleSendEmail(lead.id)}
+                        disabled={generatingEmail === lead.id}
+                        activeOpacity={0.7}
+                      >
+                        {generatingEmail === lead.id ? (
+                          <ActivityIndicator size="small" color={colors.primary} />
+                        ) : (
+                          <Ionicons name="mail-outline" size={20} color={colors.primary} />
+                        )}
+                        <Text style={styles.actionButtonText}>Email</Text>
+                      </TouchableOpacity>
+                    </View>
+                  );
+                })()}
                 {/* Botón de Estado del Cliente */}
                 <View style={{ width: '100%', marginTop: 8 }}>
                   {(() => {
@@ -3971,7 +4065,10 @@ const FacebookLeadsListInner = (
                 {modalType === 'email' 
                   ? 'Email' 
                   : modalType === 'sms' 
-                    ? (user?.userClientData?.country?.toLowerCase().trim() === 'argentina' ? 'WhatsApp' : 'SMS')
+                    ? (() => {
+                        const setWhatsapp = setWhatsappConfig || user?.userClientData?.setWhatsapp || 'both';
+                        return setWhatsapp === 'show' ? 'WhatsApp' : 'SMS';
+                      })()
                     : 'Script de Llamada'}
               </Text>
               <TouchableOpacity onPress={handleCloseModal} style={styles.modalCloseButton}>
@@ -4001,7 +4098,10 @@ const FacebookLeadsListInner = (
                   style={[styles.modalActionButton, styles.sendButton, styles.fullWidthButton]}
                   onPress={
                     modalType === 'sms' 
-                      ? (user?.userClientData?.country?.toLowerCase().trim() === 'argentina' ? handleSendWhatsAppFromModal : handleSendSMSFromModal)
+                      ? (() => {
+                          const setWhatsapp = setWhatsappConfig || user?.userClientData?.setWhatsapp || 'both';
+                          return setWhatsapp === 'show' ? handleSendWhatsAppFromModal : handleSendSMSFromModal;
+                        })()
                       : handleSendEmailFromModal
                   }
                   activeOpacity={0.7}
@@ -4367,7 +4467,7 @@ const FacebookLeadsListInner = (
                   <Text style={styles.reminderCheckboxText}>Recordarme por whatsapp</Text>
                 </TouchableOpacity>
                 <Text style={styles.reminderInfoText}>
-                  Te notificaremos por Whatsapp 1 hora antes
+                  Te notificaremos por Whatsapp unas horas antes
                 </Text>
               </View>
             </View>

@@ -27,6 +27,7 @@ interface MobileDrawerProps {
   aiMessageInstructions?: string;
   messagesUpdating?: boolean;
   onOpenMessages?: () => void;
+  onOpenButtons?: () => void;
   onOpenNotifications?: () => void;
   onUpdateMessagesCache?: () => Promise<void>;
 }
@@ -45,6 +46,7 @@ export const MobileDrawer: React.FC<MobileDrawerProps> = ({
   notificationsUpdating,
   onToggleNotifications,
   onOpenMessages,
+  onOpenButtons,
   onOpenNotifications,
   messagesUpdating,
   onUpdateMessagesCache,
@@ -174,6 +176,33 @@ export const MobileDrawer: React.FC<MobileDrawerProps> = ({
               />
               <Text style={[styles.menuItemText, { color: '#fff' }]}>
                 Mensajes
+              </Text>
+            </TouchableOpacity>
+          )}
+          {clientId && onOpenButtons && (
+            <TouchableOpacity
+              style={styles.menuItem}
+              onPress={() => {
+                onClose();
+                if (Platform.OS === 'web') {
+                  setTimeout(() => {
+                    onOpenButtons();
+                  }, 100);
+                } else {
+                  setTimeout(() => {
+                    onOpenButtons();
+                  }, 350);
+                }
+              }}
+              activeOpacity={0.7}
+            >
+              <Ionicons 
+                name="phone-portrait-outline" 
+                size={24} 
+                color="#fff" 
+              />
+              <Text style={[styles.menuItemText, { color: '#fff' }]}>
+                Botones
               </Text>
             </TouchableOpacity>
           )}

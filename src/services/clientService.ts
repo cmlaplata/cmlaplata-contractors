@@ -5,6 +5,7 @@ export interface Client {
   businessName: string;
   leadsNotificationAllDay: boolean;
   aiMessageInstructions?: string;
+  setWhatsapp?: 'show' | 'both' | 'hidden';
   // ... otros campos
 }
 
@@ -17,6 +18,7 @@ export interface ApiResponse<T> {
 export interface UpdateClientDto {
   leadsNotificationAllDay?: boolean;
   aiMessageInstructions?: string;
+  setWhatsapp?: 'show' | 'both' | 'hidden';
   // ... otros campos opcionales
 }
 

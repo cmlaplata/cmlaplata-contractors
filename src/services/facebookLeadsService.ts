@@ -27,6 +27,11 @@ export interface FacebookLead {
   data3: string | null;
   data4: string | null;
   data5: string | null;
+  extraData1: string | null;
+  extraData2: string | null;
+  extraData3: string | null;
+  extraData4: string | null;
+  extraData5: string | null;
   createdAt: string;
   updatedAt: string;
   client?: {
